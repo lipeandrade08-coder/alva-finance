@@ -1,0 +1,12 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+node_modules/
+coverage/
+__pycache__/
+*.pyc
+supabase/.temp/
+supabase/.branches/
+*.zip
+*.tar.gz

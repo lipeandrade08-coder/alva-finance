@@ -1,0 +1,7 @@
+[auth.email.template.magic_link]
+subject = "Seu codigo de acesso a Alva"
+content_path = "./supabase/templates/email-otp.html"
+
+[auth.email.template.confirmation]
+subject = "Confirme seu e-mail na Alva"
+content_path = "./supabase/templates/email-otp.html"

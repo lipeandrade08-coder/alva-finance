@@ -1,0 +1,2 @@
+// Configuracao publica do projeto Alva. Nenhuma chave secreta neste arquivo.
+window.ALVA_CONFIG = {"supabaseUrl": "https://hulthncrbuyqedvdkynv.supabase.co", "supabasePublicKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh1bHRobmNyYnV5cWVkdmRreW52Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM5MTY3MDIsImV4cCI6MjEwOTQ5MjcwMn0.c4yNzAEu5JgQ0iaFm_lOze9EeXp04LUfx9rUm4AjvpM", "authMode": "password"};
