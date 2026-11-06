@@ -82,6 +82,25 @@ body{background:#eef3e8;background-image:radial-gradient(ellipse at 88% 8%,#cce5
  .mobile-bottom button.active:after{display:none}
  .mobile-bottom .icon{width:19px;height:19px}
 }
+@media(max-width:700px){
+ dialog{position:fixed;inset:auto;top:calc(var(--visual-top,0px) + max(10px,var(--safe-top)));bottom:auto;left:max(10px,var(--safe-left));right:max(10px,var(--safe-right));width:calc(100% - max(20px,var(--safe-left) + var(--safe-right)));max-width:480px;max-height:calc(var(--visual-height,100dvh) - max(20px,var(--safe-top)) - 14px);margin:0 auto;padding:16px 18px 18px;border-radius:22px;border:1px solid rgba(255,255,255,.96);background:rgba(255,255,255,.97);backdrop-filter:blur(26px) saturate(1.3);-webkit-backdrop-filter:blur(26px) saturate(1.3);box-shadow:0 24px 70px rgba(17,56,43,.24);overflow-y:auto;-webkit-overflow-scrolling:touch}
+ dialog:before{display:none}
+ dialog .modal-header{position:sticky;top:-16px;background:rgba(255,255,255,.97);padding:4px 0 10px;margin:-4px 0 11px;z-index:3}
+ dialog .modal-header h2{font-size:18px;line-height:1.3}
+ dialog .form-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 11px}
+ dialog .field.full{grid-column:1/-1}
+ dialog .field{font-size:11px;gap:5px}
+ dialog .input,dialog select,dialog textarea{min-height:42px;padding:8px 11px;font-size:16px;border-radius:10px}
+ dialog .form-note{margin-top:10px;font-size:11px;line-height:1.55}
+ dialog .modal-actions{position:sticky;bottom:-18px;background:rgba(255,255,255,.97);padding:12px 0 2px;margin-top:12px;border-top:1px solid #edf0e7;z-index:3}
+ dialog .modal-actions .button{min-height:44px;font-size:12px;padding:9px 12px}
+ .keyboard-open dialog{top:calc(var(--visual-top,0px) + max(6px,var(--safe-top)));max-height:calc(var(--visual-height,100dvh) - max(12px,var(--safe-top)) - 6px);padding:13px 15px 14px}
+ .keyboard-open dialog .modal-header{position:static;padding:0 0 8px;margin:0 0 9px}
+ .keyboard-open dialog .modal-actions{position:static;padding:10px 0 0;margin-top:10px}
+}
+@media(max-width:340px){
+ dialog .form-grid{grid-template-columns:minmax(0,1fr)}
+}
 @media(max-width:480px){
  .stat-sparkline{display:none}
 }
