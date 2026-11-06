@@ -253,7 +253,17 @@ function toggleVoiceRecording(){
  try{rec.start();}catch{voiceRecording=false;speechRec=null;shell();postRender();}
 }
 function postRender(){if(authVisible){authUI.mounted();animateAuth();return;}simulate();syncLayout();animatePage(view);document.querySelectorAll('input[type="number"]').forEach(el=>el.inputMode='decimal');attachEditButtons();const chat=$('#chat-messages');if(chat)chat.scrollTop=chat.scrollHeight;}
-function navigate(id){view=id;shell();postRender();window.scrollTo({top:0,behavior:'instant'});}
+function navigate(id){
+ const wasDrawer=document.body.classList.contains('menu-open');
+ view=id;shell();
+ if(wasDrawer){
+  $('.sidebar')?.classList.add('open');
+  $('.mobile-overlay')?.classList.add('show');
+  document.body.classList.add('menu-open');
+  setTimeout(()=>setMenu(false),240);
+ }
+ postRender();window.scrollTo({top:0,behavior:'instant'});
+}
 async function sendMessage(question){
  if(chatBusy||!question.trim())return;
  const text=question.trim(),history=messages.slice(-8);
