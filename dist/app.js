@@ -1,4 +1,4 @@
-import {categories,money,escapeHTML as e,dateISO,cents,numeric,emptyData,sampleData,totals,projection,budgetBreakdown,localAnswer,importDocumentFile,applyImportedData,tryChatCommand} from './finance.js';
+import {categories,money,escapeHTML as e,dateISO,cents,numeric,emptyData,sampleData,totals,projection,budgetBreakdown,localAnswer,importDocumentFile,applyImportedData,describeImportedData,parseDocumentContent,tryChatCommand} from './finance.js';
 import * as api from './api.js';
 import {createAuthUI} from './auth-ui.js';
 import {animateAuth,animatePage,animateModal,animateSimulation,setMenu,syncLayout} from './motion.js';
@@ -68,18 +68,63 @@ async function handleFiles(fileList){
   }
  }
  if(!totalAdded)throw new Error('Não encontrei lançamentos, dívidas ou metas válidas neste arquivo. Use colunas como Descrição, Valor e Data.');
- let summaryText='';
+ const summaryText=describeImportedData(combined);
+ const previewLines=[
+  ...combined.transactions.slice(0,6).map(t=>`• ${t.type==='income'?'+':'−'} ${money(t.amount)} — ${t.name} (${t.category}, ${new Date(t.date+'T12:00:00').toLocaleDateString('pt-BR')})`),
+  ...combined.debts.slice(0,4).map(d=>`• Dívida: ${d.name} — ${money(d.balance)} em ${d.installments||1}x`),
+  ...combined.goals.slice(0,3).map(g=>`• Meta: ${g.name} — ${money(g.target)}`),
+  ...combined.investments.slice(0,3).map(i=>`• Investimento: ${i.name} — ${money(i.amount)}`)
+ ];
+ if(totalAdded>previewLines.length)previewLines.push(`• ...e mais ${totalAdded-previewLines.length} registro(s).`);
+ messages.push({role:'user',content:`📎 Documento anexado: ${summaries.join(', ')}`});
+ messages.push({role:'assistant',content:`Li o documento (${summaries.join(', ')}) e atualizei todo o seu painel automaticamente! 🌿\n\nForam importados: ${summaryText}.\n\n${previewLines.join('\n')}`});
  await commit(next=>{
-  summaryText=applyImportedData(next,combined);
+  applyImportedData(next,combined);
   if(allTxDates.length&&!allTxDates.includes(month))month=allTxDates.sort().at(-1);
  },`Painel atualizado: ${summaryText}!`);
- messages.push({role:'user',content:`📎 Documento anexado: ${summaries.join(', ')}`});
- messages.push({role:'assistant',content:`Li o documento (${summaries.join(', ')}) e atualizei todo o seu painel automaticamente! 🌿\n\nForam reconhecidos e adicionados: ${summaryText}.\nVocê já pode conferir os números atualizados na Visão geral, Lançamentos e Minhas dívidas.`});
- shell();postRender();
 }
 function postRender(){if(authVisible){authUI.mounted();animateAuth();return;}simulate();syncLayout();animatePage(view);document.querySelectorAll('input[type="number"]').forEach(el=>el.inputMode='decimal');attachEditButtons();const chat=$('#chat-messages');if(chat)chat.scrollTop=chat.scrollHeight;}
 function navigate(id){view=id;shell();postRender();window.scrollTo({top:0,behavior:'instant'});}
-async function sendMessage(question){if(chatBusy||!question.trim())return;const history=messages.slice(-8);messages.push({role:'user',content:question.trim()});chatBusy=true;view='assistant';shell();postRender();try{const cmd=tryChatCommand(question);if(cmd){await commit(next=>{if(cmd.kind==='debt')next.debts.push(cmd.item);if(cmd.kind==='transaction')next.transactions.push(cmd.item);},'Painel atualizado pela Alva!');messages.push({role:'assistant',content:cmd.reply.replace(/\*\*/g,'')});return;}let answer;if(demo)answer=businessAnswer(question,data,month)||localAnswer(question,data,month);else{try{const result=await api.askAgent(question,history);answer=result.answer;}catch{}if(!answer)answer=businessAnswer(question,data,month)||localAnswer(question,data,month);}messages.push({role:'assistant',content:answer});}catch(err){messages.push({role:'assistant',content:businessAnswer(question,data,month)||localAnswer(question,data,month)});}finally{chatBusy=false;shell();postRender();}}
+async function sendMessage(question){
+ if(chatBusy||!question.trim())return;
+ const text=question.trim(),history=messages.slice(-8);
+ messages.push({role:'user',content:text});
+ chatBusy=true;view='assistant';shell();postRender();
+ try{
+  const cmd=tryChatCommand(text,data);
+  if(cmd){
+   await commit(next=>{
+    if(cmd.kind==='debt')next.debts.push(cmd.item);
+    if(cmd.kind==='goal')next.goals.push(cmd.item);
+    if(cmd.kind==='investment'){next.investments.push(cmd.item);next.transactions.push({id:crypto.randomUUID(),name:cmd.item.name,category:'Investimentos',type:'expense',amount:cmd.item.amount,date:dateISO(),linked:cmd.item.id});}
+    if(cmd.kind==='transaction')next.transactions.push(cmd.item);
+    if(cmd.kind==='delete-debt'){next.debts=next.debts.filter(d=>d.id!==cmd.id);next.transactions.forEach(t=>{if(t.linked===cmd.id)delete t.linked;});}
+    if(cmd.kind==='delete-transaction')next.transactions=next.transactions.filter(t=>t.id!==cmd.id||t.linked);
+   },'Painel atualizado pela Alva!');
+   messages.push({role:'assistant',content:cmd.reply});
+   return;
+  }
+  if(!/\?$/.test(text)&&text.includes('\n')){
+   const parsed=parseDocumentContent(text,'mensagem');
+   const count=parsed.transactions.length+parsed.debts.length+parsed.goals.length+parsed.investments.length;
+   if(count>0){
+    const summaryText=describeImportedData(parsed);
+    await commit(next=>{applyImportedData(next,parsed);},`Painel atualizado: ${summaryText}!`);
+    messages.push({role:'assistant',content:`Reconheci os dados enviados na mensagem e atualizei seu painel com ${summaryText}! 🌿`});
+    return;
+   }
+  }
+  let answer;
+  if(demo)answer=businessAnswer(text,data,month)||localAnswer(text,data,month);
+  else{
+   try{const result=await api.askAgent(text,history);answer=result.answer;}catch{}
+   if(!answer)answer=businessAnswer(text,data,month)||localAnswer(text,data,month);
+  }
+  messages.push({role:'assistant',content:answer});
+ }catch(err){
+  messages.push({role:'assistant',content:businessAnswer(text,data,month)||localAnswer(text,data,month)});
+ }finally{chatBusy=false;shell();postRender();}
+}
 function authModal(mode='signup'){setMenu(false);authVisible=true;authUI.open(mode);window.scrollTo({top:0,behavior:'instant'});}
 async function enterAccount(){const account=await api.loadAccount();data=account.data;ensureBusiness(data,false);authVisible=false;authUI.stop();revision=account.revision;demo=false;messages=[{role:'assistant',content:`Olá, ${data.profile.name.split(' ')[0]||'bem-vindo'}! 🌿 Posso analisar os dados da sua conta, registrar movimentações por conversa ou importar sua planilha (.xlsx, .csv, .ofx) para atualizar seu painel automaticamente.`}];$('#modal').close();navigate('dashboard');toast('Sua conta está pronta. Bem-vindo à Alva!');}
 document.addEventListener('click',async ev=>{const b=ev.target.closest('button,a,[data-edit]');if(!b)return;try{if(await authUI.click(b))return;if(authVisible)return;if(await businessUI.click(b))return;if(b.dataset.nav){ev.preventDefault();navigate(b.dataset.nav);return;}if(b.dataset.chart){chartMode=b.dataset.chart;shell();postRender();return;}if(b.dataset.question){await sendMessage(b.dataset.question);return;}if(b.dataset.contribute){recordModal('contribute',b.dataset.contribute);return;}if(b.dataset.pay){recordModal('pay',b.dataset.pay);return;}if(b.dataset.edit){recordModal('transaction',b.dataset.edit);return;}if(b.dataset.delete){const t=data.transactions.find(t=>t.id===b.dataset.delete);modal('Excluir lançamento?',`<input type="hidden" name="id" value="${e(t.id)}"><p class="muted" style="font-size:12px;line-height:1.9">${e(t.name)} · ${money(t.amount)}<br>O saldo será recalculado após a exclusão.</p>`,'delete-form','Excluir lançamento');return;}if(b.dataset.deleteDebt){const d=data.debts.find(d=>d.id===b.dataset.deleteDebt);if(!d)return;modal('Excluir dívida?',`<input type="hidden" name="id" value="${e(d.id)}"><p class="muted" style="font-size:12px;line-height:1.9">${e(d.name)} · ${money(d.balance)} em aberto<br>A dívida será removida da sua lista.</p>`,'delete-debt-form','Excluir dívida');return;}const a=b.dataset.action;if(['transaction','goal','debt','investment'].includes(a))recordModal(a);if(a==='import-file')$('#file-importer')?.click();if(a==='close-modal')$('#modal').close();if(a==='export')exportCSV();if(a==='privacy'){hidden=!hidden;shell();postRender();}if(a==='menu')setMenu(true);if(a==='close-menu')setMenu(false);if(a==='prev-month'||a==='next-month'){const d=new Date(month+'-15T12:00:00');d.setMonth(d.getMonth()+(a==='prev-month'?-1:1));month=dateISO(d).slice(0,7);shell();postRender();}if(a==='login')authModal();if(a==='logout'){await api.logout();clearAccount();authUI.open('login');toast('Você saiu da sua conta.');}if(a==='help')modal('Um passo de cada vez',`<div class="connection-guide"><b>1. Organize seu ponto de partida</b><br>Em Configurações, informe seu saldo inicial e orçamento, ou clique em Importar planilha.<br><br><b>2. Migre sua planilha automaticamente</b><br>Anexe arquivos .xlsx, .csv ou .ofx na Assistente Alva ou no topo do painel para preencher seus lançamentos, dívidas e metas.<br><br><b>3. Dê um destino ao seu dinheiro</b><br>Crie objetivos e acompanhe as parcelas das dívidas.<br><br><b>4. Converse com a Alva</b><br>Pergunte sobre seus gastos ou registre dizendo, por exemplo, "Gastei 60 no mercado".</div>`,'');if(a==='notifications'){const due=data.debts.filter(d=>d.balance>0).sort((a,b)=>a.due.localeCompare(b.due));modal('No seu radar',due.map(d=>`<div class="next-bill"><span class="category-icon">${icon('calendar')}</span><div class="bill-info">${e(d.name)}<p>Vencimento: ${new Date(d.due+'T12:00:00').toLocaleDateString('pt-BR')}</p></div><span class="amount money">${money(d.balance)}</span></div>`).join('')||'<p class="empty">Nenhuma dívida em aberto. 🌱</p>','');}}catch(err){formError(err);}});

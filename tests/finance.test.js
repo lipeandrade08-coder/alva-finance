@@ -20,7 +20,7 @@ test('importa planilha CSV e aplica lançamentos e dívidas no estado',()=>{
  assert.ok(summary.includes('2 lançamentos'));
  assert.equal(totals(s,'2026-11').balance,464950);
 });
-test('comandos na conversa da Alva criam lançamentos e dívidas com parcelas',()=>{
+test('comandos na conversa da Alva criam lançamentos, dívidas, metas e investimentos',()=>{
  const txCmd=tryChatCommand('Gastei 89,90 no mercado hoje');
  assert.equal(txCmd.kind,'transaction');
  assert.equal(txCmd.item.amount,8990);
@@ -29,4 +29,27 @@ test('comandos na conversa da Alva criam lançamentos e dívidas com parcelas',(
  assert.equal(debtCmd.kind,'debt');
  assert.equal(debtCmd.item.total,120000);
  assert.equal(debtCmd.item.installments,6);
+ const goalCmd=tryChatCommand('Criar meta Viagem de 5000');
+ assert.equal(goalCmd.kind,'goal');
+ assert.equal(goalCmd.item.target,500000);
+ const invCmd=tryChatCommand('Investi 400 em Tesouro Selic');
+ assert.equal(invCmd.kind,'investment');
+ assert.equal(invCmd.item.amount,40000);
+});
+test('importa planilha com linha de título, cabeçalhos compostos e sem cabeçalho',()=>{
+ const csv='Controle Financeiro Novembro;;;\nData da compra;Descrição do gasto;Valor (R$);Categoria\n01/11/2026;Salário empresa;4.500,00;Salário\n03/11/2026;Supermercado;-420,37;Alimentação';
+ const parsed=parseDocumentContent(csv,'planilha.csv');
+ assert.equal(parsed.transactions.length,2);
+ assert.equal(parsed.transactions[0].name,'Salário empresa');
+ assert.equal(parsed.transactions[0].amount,450000);
+ assert.equal(parsed.transactions[0].type,'income');
+ assert.equal(parsed.transactions[1].name,'Supermercado');
+ assert.equal(parsed.transactions[1].amount,42037);
+ assert.equal(parsed.transactions[1].type,'expense');
+ const noHeader='05/11/2026;Uber;-32,50\n06/11/2026;Freela;800,00';
+ const parsedNoHeader=parseDocumentContent(noHeader,'sem-cabecalho.csv');
+ assert.equal(parsedNoHeader.transactions.length,2);
+ assert.equal(parsedNoHeader.transactions[0].name,'Uber');
+ assert.equal(parsedNoHeader.transactions[0].amount,3250);
+ assert.equal(parsedNoHeader.transactions[1].type,'income');
 });

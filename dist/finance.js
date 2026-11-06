@@ -26,53 +26,246 @@ export function sampleData(){
 export function totals(state,month){const list=state.transactions.filter(t=>t.date.startsWith(month));const sum=(items,type)=>items.filter(t=>t.type===type).reduce((a,t)=>a+t.amount,0);return {income:sum(list,'income'),expense:sum(list,'expense'),balance:state.profile.opening_balance+sum(state.transactions,'income')-sum(state.transactions,'expense'),saved:state.goals.reduce((a,g)=>a+g.saved,0),debt:state.debts.reduce((a,d)=>a+d.balance,0),invested:state.investments.reduce((a,i)=>a+i.amount,0),list};}
 export function projection(initial,monthly,annual,years){const rate=Math.pow(1+annual/100,1/12)-1;const months=Math.round(years*12);let total=initial;const points=[total];for(let n=1;n<=months;n++){total=total*(1+rate)+monthly;if(n%12===0)points.push(total);}return {total:Math.round(total),contributed:initial+monthly*months,points};}
 export function budgetBreakdown(state,month){const list=state.transactions.filter(t=>t.type==='expense'&&t.date.startsWith(month));const sums={};for(const t of list)sums[t.category]=(sums[t.category]||0)+t.amount;return Object.entries(sums).sort((a,b)=>b[1]-a[1]);}
-export function localAnswer(question,state,month){const q=question.toLowerCase();const t=totals(state,month);
- if(/gastei|gastos|gasto|despesa|resumo|saldo/.test(q)){const top=budgetBreakdown(state,month)[0];return `Neste mês, você registrou ${money(t.income)} em entradas e ${money(t.expense)} em saídas. Seu saldo disponível total é ${money(t.balance)}.\n\n${top?`Sua maior categoria de saídas no mês é ${top[0]}, somando ${money(top[1])}. Se quiser, você pode anexar uma planilha ou extrato aqui no chat para atualizar seus lançamentos automaticamente.`:'Você ainda não tem saídas neste mês. Pode registrar pelo botão Novo lançamento, me contar por aqui (ex.: "Gastei 50 no mercado") ou anexar sua planilha.'}`;}
- if(/divida|dívida|quitar|pagar|cartão|parcela/.test(q)){const active=state.debts.filter(d=>d.balance>0).sort((a,b)=>a.due.localeCompare(b.due));const d=active[0];const count=d?Math.max(1,Number(d.installments)||1):1;return d?`Suas dívidas em aberto somam ${money(t.debt)}. O próximo compromisso é ${d.name}, em ${count}x (${money(Math.round(d.total/count))} por parcela), com ${money(d.balance)} restantes.\n\nAo usar “Registrar pagamento” em Minhas dívidas, o valor é abatido do saldo da dívida e lançado automaticamente nas suas saídas.`:'Você não tem dívidas em aberto registradas no momento. Se quiser adicionar uma, vá em Minhas dívidas ou anexe sua planilha aqui.';}
- if(/meta|juntar|economizar|guardar|reserva|viagem|objetivo/.test(q)){const g=state.goals.find(g=>g.saved<g.target);return g?`Você já acumulou ${money(g.saved)} para ${g.name} (meta de ${money(g.target)}). Faltam ${money(Math.max(0,g.target-g.saved))}.\n\nGuardando em 12 meses, o passo mensal seria de ${money(Math.ceil((g.target-g.saved)/12))}.`:'Crie um objetivo com valor e prazo em Meus objetivos, ou anexe sua planilha financeira para importar suas metas.';}
- if(/invest|rende|rendimento|aplicar/.test(q))return `Você tem ${money(t.invested)} registrados em investimentos. Na aba Investimentos você pode simular aportes mensais e comparar cenários de longo prazo.\n\nLembre-se de alinhar cada escolha ao seu prazo, liquidez e reserva de segurança.`;
- if(/planilha|importar|anexar|documento|arquivo|extrato|migrar/.test(q))return `Você pode anexar sua planilha (**.xlsx**, **.csv**, **.tsv**), extrato bancário (**.ofx**) ou arquivo de texto (**.txt**, **.json**) clicando no botão **Anexar planilha/documento** aqui embaixo!\n\nEu reconheço automaticamente seus lançamentos, dívidas (com parcelas), objetivos e investimentos e atualizo todo o seu painel na hora.`;
- return `No mês selecionado, você tem ${money(t.income)} em entradas, ${money(t.expense)} em saídas e saldo total de ${money(t.balance)}.\n\nVocê pode:\n• Perguntar sobre seus gastos, metas, dívidas ou negócio\n• Registrar direto pelo chat (ex.: *"Gastei 85 no mercado"* ou *"Dívida cartão 1200 em 6x"*)\n• Clicar no clipe **Anexar documento** para migrar uma planilha ou extrato e atualizar seu painel automaticamente.`;
+export function localAnswer(question,state,month){
+ const q=String(question||'').toLowerCase().trim();
+ const t=totals(state,month),byCat=budgetBreakdown(state,month),top=byCat[0];
+ const activeDebts=state.debts.filter(d=>d.balance>0).sort((a,b)=>a.due.localeCompare(b.due));
+ const activeGoals=state.goals.filter(g=>g.saved<g.target);
+ if(/^(oi|ol[aá]|bom dia|boa tarde|boa noite|e a[ií]|tudo bem)\b/.test(q)){
+  return `Olá! 🌿 Seu saldo disponível atual é ${money(t.balance)}. Neste mês você tem ${money(t.income)} em entradas e ${money(t.expense)} em saídas.\n\nVocê pode me pedir para:\n• Lançar gastos ou receitas (ex.: "Gastei 85 no mercado" ou "Recebi 3000 de salário")\n• Cadastrar ou excluir dívidas e metas (ex.: "Dívida cartão 1200 em 6x" ou "Criar meta viagem 5000")\n• Ou clicar em Anexar para importar sua planilha (.xlsx, .csv, .ofx) e atualizar todo o painel automaticamente!`;
+ }
+ if(/maior(?:es)?\s+gasto|onde\s+gastei|categoria|para\s+onde\s+vai/.test(q)){
+  if(!byCat.length)return `Você ainda não tem saídas registradas neste mês (${month}). Quando registrar ou importar sua planilha, mostro aqui o ranking completo por categoria.`;
+  const list=byCat.slice(0,5).map(([cat,val],i)=>`${i+1}. ${cat}: ${money(val)} (${Math.round(val/Math.max(1,t.expense)*100)}%)`).join('\n');
+  return `Aqui estão suas maiores categorias de saída neste mês (total de ${money(t.expense)}):\n\n${list}\n\nSeu saldo disponível total é ${money(t.balance)}.`;
+ }
+ if(/gastei|gastos|gasto|despesa|resumo|saldo|sobrou|quanto\s+tenho|extrato/.test(q)){
+  const net=t.income-t.expense;
+  return `Resumo do seu mês (${month}):\n• Entradas no mês: ${money(t.income)}\n• Saídas no mês: ${money(t.expense)}\n• Balanço do mês: ${net>=0?'+':'−'}${money(Math.abs(net))}\n• Saldo disponível total: ${money(t.balance)}\n\n${top?`A categoria com maior saída é ${top[0]} (${money(top[1])}).`:'Nenhuma saída registrada neste mês.'}`;
+ }
+ if(/divida|dívida|quitar|pagar|cartão|parcela|devo/.test(q)){
+  if(!activeDebts.length)return 'Você não tem dívidas em aberto no momento! 🌱 Se quiser cadastrar alguma, diga por exemplo: "Adicionar dívida Cartão 1200 em 6x" ou anexe sua planilha.';
+  const lines=activeDebts.slice(0,5).map(d=>{const c=Math.max(1,Number(d.installments)||1);return `• ${d.name}: ${money(d.balance)} em aberto (${c}x de ${money(Math.round(d.total/c))}, venc. ${new Date(d.due+'T12:00:00').toLocaleDateString('pt-BR')})`;}).join('\n');
+  return `Você tem ${activeDebts.length} ${activeDebts.length===1?'dívida em aberto':'dívidas em aberto'}, somando ${money(t.debt)}:\n\n${lines}\n\nVocê pode registrar pagamentos ou excluir uma dívida na aba Minhas dívidas (ou me pedir: "Excluir dívida ${activeDebts[0].name}").`;
+ }
+ if(/meta|juntar|economizar|guardar|reserva|viagem|objetivo|sonho/.test(q)){
+  if(!state.goals.length)return 'Você ainda não cadastrou objetivos. Diga por exemplo "Criar meta Reserva de emergência de 10000" ou clique em Meus objetivos.';
+  const lines=state.goals.map(g=>`• ${g.emoji||'🌱'} ${g.name}: ${money(g.saved)} de ${money(g.target)} (${Math.min(100,Math.round(g.saved/Math.max(1,g.target)*100))}%)`).join('\n');
+  const nextGoal=activeGoals[0];
+  return `Seus objetivos somam ${money(t.saved)} guardados:\n\n${lines}${nextGoal?`\n\nPara concluir "${nextGoal.name}", faltam ${money(nextGoal.target-nextGoal.saved)} (ou ${money(Math.ceil((nextGoal.target-nextGoal.saved)/12))}/mês em 1 ano).`:''}`;
+ }
+ if(/invest|rende|rendimento|aplicar|patrim[oô]nio/.test(q)){
+  const lines=state.investments.map(i=>`• ${i.name} (${i.kind}): ${money(i.amount)}`).join('\n');
+  return `Você tem ${money(t.invested)} aplicados em investimentos${lines?':\n\n'+lines:'.'}\n\nPara registrar um novo aporte pelo chat, diga por exemplo: "Investi 500 em Renda fixa".`;
+ }
+ if(/dica|organizar|ajuda|planejar|analis|como\s+estou|diagn[oó]stico/.test(q)){
+  const net=t.income-t.expense;
+  const tips=[];
+  if(t.expense>t.income&&t.income>0)tips.push(`• Suas saídas (${money(t.expense)}) superaram as entradas (${money(t.income)}) neste mês. Revise a categoria ${top?top[0]:'principal'}.`);
+  else if(t.income>0)tips.push(`• Você está com saldo positivo de ${money(net)} no mês (${Math.round(net/t.income*100)}% das entradas preservadas).`);
+  if(t.debt>0)tips.push(`• Você possui ${money(t.debt)} em dívidas abertas. Priorize quitar as parcelas em dia.`);
+  if(activeGoals.length)tips.push(`• Separe uma parte do saldo para o objetivo "${activeGoals[0].name}" (faltam ${money(activeGoals[0].target-activeGoals[0].saved)}).`);
+  if(!tips.length)tips.push('• Comece registrando suas receitas e despesas ou anexe sua planilha financeira no botão Anexar.');
+  return `Diagnóstico rápido da sua conta:\n• Saldo disponível: ${money(t.balance)}\n• Guardado em metas: ${money(t.saved)} | Investido: ${money(t.invested)}\n• Dívidas em aberto: ${money(t.debt)}\n\nRecomendações:\n${tips.join('\n')}`;
+ }
+ if(/planilha|importar|anexar|documento|arquivo|extrato|migrar/.test(q)){
+  return `Para migrar sua planilha ou extrato automaticamente:\n1. Clique no botão Anexar (clipe ao lado da mensagem) ou em Importar planilha no topo da tela.\n2. Escolha seu arquivo Excel (.xlsx), CSV (.csv), extrato (.ofx) ou texto (.txt).\n3. Eu reconheço todas as colunas (Data, Descrição, Categoria, Valor, Parcelas) e atualizo o seu painel e gráficos na hora!`;
+ }
+ return `Aqui está o panorama atual da sua conta (${month}):\n• Saldo disponível: ${money(t.balance)}\n• Entradas no mês: ${money(t.income)} | Saídas: ${money(t.expense)}\n• Objetivos: ${money(t.saved)} | Dívidas: ${money(t.debt)} | Investimentos: ${money(t.invested)}\n\nSe quiser que eu lance algo agora, basta escrever por exemplo:\n• "Gastei 85 no mercado"\n• "Recebi 3500 de salário"\n• "Dívida cartão 1200 em 6x"\n• "Criar meta viagem 5000"\nOu clique em Anexar para enviar sua planilha!`;
 }
 export function inferCategory(name,type='expense'){
  const s=String(name||'').toLowerCase();
- if(type==='income'){if(/sal[aá]rio|pagamento|holerite|adiantamento|13/.test(s))return 'Salário';if(/freela|projeto|servi[cç]o|consultoria|cliente|pix recebido/.test(s))return 'Freelance';if(/rendimento|dividendo|resgate|cdb|tesouro/.test(s))return 'Investimentos';return 'Outros';}
- if(/mercado|supermercado|ifood|restaurante|padaria|lanche|caf[eé]|almo[cç]o|jantar|feira|a[cç]ougue|hortifruti|pizza|burger/.test(s))return 'Alimentação';
- if(/aluguel|condom[ií]nio|luz|energia|enel|cemig|sabesp|[aá]gua|internet|g[aá]s|iptu|moradia|casa|reforma/.test(s))return 'Moradia';
- if(/uber|99|t[aá]xi|combust[ií]vel|gasolina|etanol|posto|estacionamento|ped[aá]gio|metr[oô]|ônibus|onibus|transporte|ipva|oficina/.test(s))return 'Transporte';
- if(/farm[aá]cia|drogaria|m[eé]dico|consulta|exame|academia|plano de sa[uú]de|unimed|dentista|psic[oó]log|terapia|hospital/.test(s))return 'Saúde';
- if(/cinema|viagem|hotel|bar|show|passeio|ingresso|lazer|festa|jogo|steam/.test(s))return 'Lazer';
- if(/spotify|netflix|amazon|prime|disney|hbo|youtube|icloud|chatgpt|assinatura|mensalidade/.test(s))return 'Assinaturas';
- if(/curso|faculdade|escola|livro|livraria|educa[cç][aã]o|udemy|alura|idioma|ingl[eê]s/.test(s))return 'Educação';
- if(/cart[aã]o|fatura|empr[eé]stimo|financiamento|parcela|d[ií]vida|acordo|juros/.test(s))return 'Dívidas';
- if(/meta|reserva|objetivo|poupan[cç]a|sonho/.test(s))return 'Metas';
- if(/investimento|cdb|tesouro|fundo|a[cç][oõ]es|fii|aporte|corretora/.test(s))return 'Investimentos';
- if(/roupa|loja|shopping|mercado livre|shopee|shein|compra|presente|eletr[oô]nico/.test(s))return 'Compras';
+ if(type==='income'){if(/sal[aá]rio|pagamento|holerite|adiantamento|13|pro-labore|pr[oó]-labore/.test(s))return 'Salário';if(/freela|projeto|servi[cç]o|consultoria|cliente|pix recebido|venda|honor[aá]rio/.test(s))return 'Freelance';if(/rendimento|dividendo|resgate|cdb|tesouro|juros/.test(s))return 'Investimentos';return 'Outros';}
+ if(/mercado|supermercado|extra|carrefour|assai|atacad[aã]o|p[aã]o de a[cç][uú]car|ifood|restaurante|padaria|lanche|caf[eé]|almo[cç]o|jantar|feira|a[cç]ougue|hortifruti|pizza|burger|alimenta/.test(s))return 'Alimentação';
+ if(/aluguel|condom[ií]nio|luz|energia|enel|cemig|copel|sabesp|[aá]gua|saneamento|internet|vivo|claro|tim|oi|g[aá]s|iptu|moradia|casa|reforma|m[oó]veis/.test(s))return 'Moradia';
+ if(/uber|99|t[aá]xi|combust[ií]vel|gasolina|etanol|posto|ipiranga|shell|br|estacionamento|ped[aá]gio|sem parar|veloe|metr[oô]|ônibus|onibus|passagem|transporte|ipva|oficina|mec[aâ]nico| seguro auto/.test(s))return 'Transporte';
+ if(/farm[aá]cia|drogaria|droga raia|drogasil|pague menos|m[eé]dico|consulta|exame|academia|smartfit|plano de sa[uú]de|unimed|amil|bradesco sa[uú]de|dentista|psic[oó]log|terapia|hospital|sa[uú]de/.test(s))return 'Saúde';
+ if(/cinema|viagem|hotel|airbnb|bar|show|passeio|ingresso|lazer|festa|jogo|steam|playstation|xbox|parque/.test(s))return 'Lazer';
+ if(/spotify|netflix|amazon|prime|disney|hbo|max|globoplay|youtube|icloud|google one|chatgpt|assinatura|mensalidade|clube/.test(s))return 'Assinaturas';
+ if(/curso|faculdade|escola|col[eé]gio|livro|livraria|educa[cç][aã]o|udemy|alura|idioma|ingl[eê]s|mensalidade escolar|material/.test(s))return 'Educação';
+ if(/cart[aã]o|fatura|nubank|ita[uú]|bradesco|inter|santander|c6|empr[eé]stimo|financiamento|parcela|d[ií]vida|acordo|juros|cons[oó]rcio/.test(s))return 'Dívidas';
+ if(/meta|reserva|objetivo|poupan[cç]a|sonho|caixinha/.test(s))return 'Metas';
+ if(/investimento|cdb|tesouro|selic|ipca|fundo|a[cç][oõ]es|fii|aporte|corretora|xp|btg|nuinvest/.test(s))return 'Investimentos';
+ if(/roupa|renner|riachuelo|c&a|zara|loja|shopping|mercado livre|shopee|shein|magalu|amazon|compra|presente|eletr[oô]nico|celular|notebook/.test(s))return 'Compras';
  return 'Outros';
 }
-function parseFlexAmount(raw){
- if(typeof raw==='number')return Number.isFinite(raw)&&raw!==0?Math.round(raw*100):0;
- let s=String(raw??'').trim();if(!s)return 0;
- const neg=/^-|\(.*\)|-\s*R\$|\b(d[eé]bito|sa[ií]da|despesa|pago)\b/i.test(s)&&!/\b(entrada|receita|cr[eé]dito)\b/i.test(s);
- s=s.replace(/[^\d.,-]/g,'').replace(/^-+/,'');if(!s)return 0;
- if(s.includes(',')&&s.includes('.')){if(s.lastIndexOf(',')>s.lastIndexOf('.'))s=s.replace(/\./g,'').replace(',','.');else s=s.replace(/,/g,'');}
- else if(s.includes(',')){const parts=s.split(',');if(parts.length===2&&parts[1].length===3&&parts[0].length<=3)s=s.replace(',','');else s=s.replace(',','.');}
- const n=Number(s);if(!Number.isFinite(n)||n===0||Math.abs(n)>1e8)return 0;
- return Math.round(Math.abs(n)*100)*(neg?-1:1);
+const normStr=s=>String(s??'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+function isExcelSerialDate(v){
+ const s=String(v??'').trim();
+ if(!/^\d{5}(?:\.\d+)?$/.test(s))return false;
+ const n=Number(s);return n>=36526&&n<=60000;
 }
-function parseFlexDate(raw,fallback=dateISO()){
+function excelSerialToISO(n){
+ const days=Math.floor(Number(n));
+ const dt=new Date(Math.round((days-25569)*86400*1000)+43200000);
+ return dateISO(dt);
+}
+function isDateLikeCell(raw){
+ const s=String(raw??'').trim();if(!s)return false;
+ if(/^\d{4}-\d{2}-\d{2}(?:[T\s].*)?$/.test(s))return true;
+ if(/^\d{1,2}[\/.-]\d{1,2}(?:[\/.-]\d{2,4})?$/.test(s))return true;
+ return false;
+}
+export function parseFlexDate(raw,fallback=dateISO()){
+ if(raw instanceof Date&&!isNaN(raw))return dateISO(raw);
  const s=String(raw??'').trim();if(!s)return fallback;
  if(/^\d{4}-\d{2}-\d{2}/.test(s))return s.slice(0,10);
- const br=s.match(/^(\d{1,2})[\/.-](\d{1,2})(?:[\/.-](\d{2,4}))?/);
- if(br){let d=Number(br[1]),m=Number(br[2]),y=br[3]?Number(br[3]):Number(fallback.slice(0,4));if(y<100)y+=2000;if(d>12&&m<=12){/* DD/MM */}else if(m>12&&d<=12){[d,m]=[m,d];}if(m>=1&&m<=12&&d>=1&&d<=31)return `${String(y).padStart(4,'0')}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;}
+ const br=s.match(/^(\d{1,2})[\/.-](\d{1,2})(?:[\/.-](\d{2,4}))?$/);
+ if(br){
+  let d=Number(br[1]),m=Number(br[2]),y=br[3]?Number(br[3]):Number(fallback.slice(0,4)||new Date().getFullYear());
+  if(y<100)y+=2000;
+  if(m>12&&d<=12)[d,m]=[m,d];
+  if(m>=1&&m<=12&&d>=1&&d<=31)return `${String(y).padStart(4,'0')}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+ }
  const ofx=s.match(/^(\d{4})(\d{2})(\d{2})/);if(ofx)return `${ofx[1]}-${ofx[2]}-${ofx[3]}`;
- const serial=Number(s);if(Number.isFinite(serial)&&serial>35000&&serial<65000){const dt=new Date(Math.round((serial-25569)*86400*1000)+43200000);return dateISO(dt);}
+ if(isExcelSerialDate(s))return excelSerialToISO(Number(s));
  return fallback;
+}
+export function parseFlexAmount(raw){
+ if(typeof raw==='number')return Number.isFinite(raw)&&raw!==0?Math.round(raw*100):0;
+ let s=String(raw??'').trim();if(!s)return 0;
+ if(isDateLikeCell(s))return 0;
+ const neg=/^\s*-|\(.*\)|-\s*R\$|\b(d[eé]bito|sa[ií]da|despesa)\b/i.test(s)&&!/\b(entrada|receita|cr[eé]dito)\b/i.test(s);
+ s=s.replace(/[^\d.,-]/g,'').replace(/^-+/,'');if(!s)return 0;
+ if(s.includes(',')&&s.includes('.')){
+  if(s.lastIndexOf(',')>s.lastIndexOf('.'))s=s.replace(/\./g,'').replace(',','.');
+  else s=s.replace(/,/g,'');
+ }else if(s.includes(',')){
+  const parts=s.split(',');
+  if(parts.length===2&&parts[1].length===3&&parts[0].length<=3)s=s.replace(',','');
+  else s=s.replace(',','.');
+ }
+ const n=Number(s);if(!Number.isFinite(n)||n===0||Math.abs(n)>1e8)return 0;
+ return Math.round(Math.abs(n)*100)*(neg?-1:1);
 }
 function splitCSVLine(line,sep){
  const out=[];let cur='',inQuotes=false;
  for(let i=0;i<line.length;i++){const ch=line[i];if(ch==='"'){if(inQuotes&&line[i+1]==='"'){cur+='"';i++;}else inQuotes=!inQuotes;}else if(ch===sep&&!inQuotes){out.push(cur.trim());cur='';}else cur+=ch;}
  out.push(cur.trim());return out;
+}
+function parseTableRows(rows,result,sheetHint=''){
+ if(!rows?.length)return;
+ let colMap=null;
+ const hintNorm=normStr(sheetHint);
+ for(let r=0;r<rows.length;r++){
+  const row=rows[r].map(c=>String(c??'').trim());
+  const nonEmpty=row.filter(Boolean);
+  if(nonEmpty.length<2)continue;
+  const headers=row.map(normStr);
+  const descIdx=headers.findIndex(h=>/\b(descricao|historico|nome|titulo|lancamento|item|estabelecimento|divida|meta|objetivo|investimento|conta|gasto|despesa|receita|origem|referencia|detalhe|credor|fornecedor|cliente)\b/.test(h));
+  const valIdx=headers.findIndex(h=>/\b(valor|quantia|total|saldo|montante|preco|entrada|saida|amount|meta|alvo|parcela|aplicado|aberto)\b/.test(h));
+  if(descIdx>=0&&valIdx>=0&&descIdx!==valIdx&&!row.some(c=>isDateLikeCell(c))){
+   colMap={
+    name:descIdx,
+    amount:headers.findIndex((h,i)=>i!==descIdx&&/\b(valor|quantia|montante|preco|amount|valor pago|valor aplicado)\b/.test(h)),
+    incomeCol:headers.findIndex(h=>/\b(entrada|entradas|receita|receitas|credito|ganho)\b/.test(h)),
+    expenseCol:headers.findIndex(h=>/\b(saida|saidas|despesa|despesas|debito|gasto|gastos)\b/.test(h)),
+    total:headers.findIndex((h,i)=>i!==descIdx&&/\b(total|valor total|meta|alvo|objetivo)\b/.test(h)),
+    balance:headers.findIndex((h,i)=>i!==descIdx&&/\b(saldo|aberto|restante|devedor)\b/.test(h)),
+    saved:headers.findIndex((h,i)=>i!==descIdx&&/\b(guardado|acumulado|ja pago|pago)\b/.test(h)),
+    type:headers.findIndex(h=>/\b(tipo|natureza|movimentacao|fluxo|operacao|status)\b/.test(h)),
+    category:headers.findIndex(h=>/\b(categoria|classificacao|grupo|setor|area)\b/.test(h)),
+    date:headers.findIndex(h=>/\b(data|dt|dia|competencia|emissao|compra)\b/.test(h)),
+    due:headers.findIndex(h=>/\b(vencimento|prazo|ate|limite)\b/.test(h)),
+    installments:headers.findIndex(h=>/\b(parcela|parcelas|qtd|vezes)\b/.test(h)),
+    section:/divida|devedor|emprestimo/.test(hintNorm)||headers.some(h=>/\b(divida|parcelas|saldo devedor)\b/.test(h))&&!headers.some(h=>/\b(entrada|receita)\b/.test(h))?'debt':/meta|objetivo/.test(hintNorm)||headers.some(h=>/\b(meta|objetivo|valor alvo|guardado)\b/.test(h))?'goal':/investimento/.test(hintNorm)||headers.some(h=>/\b(investimento|valor aplicado|modalidade)\b/.test(h))?'investment':'transaction'
+   };
+   if(colMap.amount<0)colMap.amount=valIdx;
+   continue;
+  }
+  if(colMap){
+   const get=idx=>idx>=0&&idx<row.length?row[idx]:'';
+   let name=get(colMap.name);
+   if(!name){
+    name=row.find((c,i)=>i!==colMap.amount&&i!==colMap.date&&i!==colMap.category&&c&&!isDateLikeCell(c)&&!isExcelSerialDate(c)&&parseFlexAmount(c)===0)||'';
+   }
+   name=String(name||'').trim().slice(0,100);
+   if(!name||/^(total|subtotal|soma|saldo anterior|saldo final|resumo)$/i.test(normStr(name)))continue;
+   const typeCell=normStr(get(colMap.type)),catCell=String(get(colMap.category)||'').trim();
+   const kind=/\b(divida|emprestimo|financiamento)\b/.test(typeCell)||(colMap.section==='debt'&&colMap.installments>=0)?'debt':/\b(meta|objetivo|reserva)\b/.test(typeCell)||colMap.section==='goal'?'goal':/\b(investimento|aplicacao|renda fixa|fundo|acoes)\b/.test(typeCell)||colMap.section==='investment'?'investment':'transaction';
+   const rawDate=get(colMap.date)||get(colMap.due);
+   const dt=parseFlexDate(rawDate);
+   if(kind==='debt'){
+    const bal=Math.abs(parseFlexAmount(get(colMap.balance)||get(colMap.amount)||get(colMap.total)));
+    const tot=Math.abs(parseFlexAmount(get(colMap.total)||get(colMap.amount)))||bal;
+    if(bal>0||tot>0){
+     const inst=Math.max(1,Math.min(360,Math.round(Number(String(get(colMap.installments)||'1').replace(/\D/g,''))||1)));
+     result.debts.push({id:crypto.randomUUID(),name:name.slice(0,80),total:Math.max(tot,bal),balance:bal||tot,installments:inst,due:parseFlexDate(get(colMap.due)||rawDate)});
+    }
+    continue;
+   }
+   if(kind==='goal'){
+    const target=Math.abs(parseFlexAmount(get(colMap.total)||get(colMap.amount)));
+    const saved=Math.abs(parseFlexAmount(get(colMap.saved)));
+    if(target>0)result.goals.push({id:crypto.randomUUID(),name:name.slice(0,80),target,saved:Math.min(target,saved),emoji:'🌱',deadline:parseFlexDate(get(colMap.due)||rawDate,'')});
+    continue;
+   }
+   if(kind==='investment'){
+    const amt=Math.abs(parseFlexAmount(get(colMap.amount)||get(colMap.total)||get(colMap.balance)));
+    if(amt>0)result.investments.push({id:crypto.randomUUID(),name:name.slice(0,80),amount:amt,kind:catCell||'Renda fixa'});
+    continue;
+   }
+   let signed=0,explicitType='';
+   if(colMap.incomeCol>=0&&colMap.expenseCol>=0&&colMap.incomeCol!==colMap.expenseCol){
+    const inc=Math.abs(parseFlexAmount(get(colMap.incomeCol))),exp=Math.abs(parseFlexAmount(get(colMap.expenseCol)));
+    if(inc>0){signed=inc;explicitType='income';}else if(exp>0){signed=-exp;explicitType='expense';}
+   }
+   if(!signed){
+    const candidate=get(colMap.amount)||get(colMap.total)||get(colMap.balance)||row.find((c,i)=>i!==colMap.name&&i!==colMap.date&&i!==colMap.category&&!isExcelSerialDate(c)&&parseFlexAmount(c)!==0)||'';
+    signed=parseFlexAmount(candidate);
+   }
+   if(!signed)continue;
+   let type=explicitType||(signed<0?'expense':'income');
+   if(/\b(saida|despesa|debito|pagamento|gasto|compra)\b/.test(typeCell))type='expense';
+   else if(/\b(entrada|receita|credito|ganho|salario|venda)\b/.test(typeCell))type='income';
+   else if(!explicitType&&signed>0&&colMap.type<0){
+    const isIncName=/\b(sal[aá]rio|freela|recebimento|dep[oó]sito|pix recebido|renda|pro-labore|pr[oó]-labore|venda|reembolso|dividendo)\b/i.test(name)||/\b(sal[aá]rio|freelance|receita|entrada)\b/i.test(catCell);
+    if(!isIncName)type='expense';
+   }
+   const matchedCat=categories.find(c=>normStr(c)===normStr(catCell))||inferCategory(name,type);
+   result.transactions.push({id:crypto.randomUUID(),name,amount:Math.abs(signed),type,category:matchedCat,date:dt});
+  }else{
+   // Row without detected header yet: inspect cells structurally
+   let dt=dateISO(),hasDate=false,signed=0,catMatch='',texts=[];
+   for(const cell of row){
+    if(!cell)continue;
+    if(!hasDate&&(isDateLikeCell(cell)||isExcelSerialDate(cell))){dt=parseFlexDate(cell);hasDate=true;continue;}
+    const foundCat=categories.find(c=>normStr(c)===normStr(cell));
+    if(foundCat&&!catMatch){catMatch=foundCat;continue;}
+    const val=parseFlexAmount(cell);
+    if(val!==0&&!isExcelSerialDate(cell)&&signed===0){signed=val;continue;}
+    if(!/^(pix|boleto|cr[eé]dito|d[eé]bito|dinheiro|transfer[eê]ncia|pago|pendente)$/i.test(cell))texts.push(cell);
+   }
+   if(!signed&&row.length===1){
+    const line=row[0];
+    const dtM=line.match(/\b(\d{1,2}[\/.-]\d{1,2}(?:[\/.-]\d{2,4})?|\d{4}-\d{2}-\d{2})\b/);
+    if(dtM)dt=parseFlexDate(dtM[1]);
+    const withoutDate=dtM?line.replace(dtM[0],' '):line;
+    const numM=[...withoutDate.matchAll(/(?:R\$\s*)?-?\d{1,3}(?:\.\d{3})*(?:,\d{1,2})|(?:R\$\s*)?-?\d+(?:[.,]\d{1,2})\b/g)];
+    const valStr=numM.at(-1)?.[0];
+    signed=parseFlexAmount(valStr);
+    if(signed){
+     const clean=withoutDate.replace(valStr,'').replace(/\b\d{1,3}\s*(?:x|parcelas?)\b/gi,'').replace(/R\$|[;|\t]+|^[\s,:-]+|[\s,:-]+$/g,' ').replace(/\s+/g,' ').trim();
+     if(clean)texts=[clean];
+    }
+   }
+   if(!signed||!texts.length)continue;
+   const fullText=row.join(' ');
+   const name=texts[0].slice(0,100);
+   if(/^(total|subtotal|soma|saldo)$/i.test(normStr(name)))continue;
+   const instMatch=fullText.match(/\b(\d{1,3})\s*(?:x|parcelas?)\b/i);
+   if(/\b(d[ií]vida|empr[eé]stimo|financiamento)\b/i.test(fullText)||instMatch){
+    const inst=instMatch?Math.max(1,Math.min(360,Number(instMatch[1]))):1;
+    result.debts.push({id:crypto.randomUUID(),name:name.replace(/^(d[ií]vida|parcelamento)\s*:?\s*/i,'').slice(0,80)||'Dívida importada',total:Math.abs(signed),balance:Math.abs(signed),installments:inst,due:dt});
+   }else if(/\b(meta|objetivo|reserva)\b/i.test(fullText)){
+    result.goals.push({id:crypto.randomUUID(),name:name.replace(/^(meta|objetivo)\s*:?\s*/i,'').slice(0,80)||'Objetivo importado',target:Math.abs(signed),saved:0,emoji:'🌱',deadline:''});
+   }else{
+    const isInc=/\b(sal[aá]rio|receita|entrada|recebi|freela|dep[oó]sito|rendimento)\b/i.test(fullText)&&signed>0;
+    const type=signed<0||!isInc?'expense':'income';
+    result.transactions.push({id:crypto.randomUUID(),name,amount:Math.abs(signed),type,category:catMatch||inferCategory(name,type),date:dt});
+   }
+  }
+ }
 }
 export function parseDocumentContent(text,fileName=''){
  const result={transactions:[],debts:[],goals:[],investments:[],profile:{}};
@@ -101,85 +294,9 @@ export function parseDocumentContent(text,fileName=''){
  const lines=raw.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);if(!lines.length)return result;
  const sample=lines.slice(0,Math.min(10,lines.length)).join('\n');
  const sep=[';','\t',',','|'].sort((a,b)=>(sample.split(b).length-1)-(sample.split(a).length-1))[0];
- const rows=lines.map(l=>splitCSVLine(l,sep));
- const norm=s=>String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
- let colMap=null;
- for(let r=0;r<rows.length;r++){
-  const row=rows[r];if(row.length<2)continue;
-  const headers=row.map(norm);
-  const hasDesc=headers.some(h=>/^(descricao|historico|nome|titulo|lancamento|item|estabelecimento|divida|meta|objetivo|investimento|conta)$/.test(h));
-  const hasVal=headers.some(h=>/^(valor|quantia|total|saldo|montante|preco|entrada|saida|amount|meta|alvo)$/.test(h));
-  if(hasDesc&&hasVal){
-   colMap={
-    name:headers.findIndex(h=>/descricao|historico|nome|titulo|lancamento|item|estabelecimento|divida|meta|objetivo|investimento|conta/.test(h)),
-    amount:headers.findIndex(h=>/^(valor|quantia|montante|preco|amount|saldo em aberto|valor pago|valor aplicado)$/.test(h)),
-    total:headers.findIndex(h=>/^(total|valor total|meta|alvo|objetivo)$/.test(h)),
-    balance:headers.findIndex(h=>/saldo|aberto|restante|devedor/.test(h)),
-    saved:headers.findIndex(h=>/guardado|acumulado|ja pago|pago/.test(h)),
-    type:headers.findIndex(h=>/^(tipo|natureza|movimentacao|fluxo|operacao)$/.test(h)),
-    category:headers.findIndex(h=>/categoria|classificacao|grupo|setor/.test(h)),
-    date:headers.findIndex(h=>/^(data|dt|dia|competencia)$/.test(h)),
-    due:headers.findIndex(h=>/vencimento|prazo|ate|limite/.test(h)),
-    installments:headers.findIndex(h=>/parcela|qtd|vezes/.test(h)),
-    section:headers.some(h=>/divida|parcela|devedor/.test(h))?'debt':headers.some(h=>/meta|objetivo|alvo/.test(h))?'goal':headers.some(h=>/investimento|aplicacao/.test(h))?'investment':'transaction'
-   };
-   continue;
-  }
-  if(colMap){
-   const get=idx=>idx>=0&&idx<row.length?row[idx]:'';
-   const name=String(get(colMap.name)||row.find(c=>c&&!parseFlexAmount(c)&&!/^\d{1,4}[\/.-]\d{1,2}/.test(c))||'').trim().slice(0,100);
-   if(!name||/^(total|subtotal|soma|saldo anterior)$/i.test(norm(name)))continue;
-   const typeCell=norm(get(colMap.type)),catCell=String(get(colMap.category)||'').trim();
-   const kind=/divida|emprestimo|financiamento/.test(typeCell)||colMap.section==='debt'&&colMap.installments>=0?'debt':/meta|objetivo|reserva/.test(typeCell)||colMap.section==='goal'?'goal':/investimento|aplicacao|renda fixa|fundo|acoes/.test(typeCell)||colMap.section==='investment'?'investment':'transaction';
-   if(kind==='debt'){
-    const bal=Math.abs(parseFlexAmount(get(colMap.balance)||get(colMap.amount)||get(colMap.total)));
-    const tot=Math.abs(parseFlexAmount(get(colMap.total)||get(colMap.amount)))||bal;
-    if(bal>0||tot>0){const inst=Math.max(1,Math.min(360,Math.round(Number(String(get(colMap.installments)||'1').replace(/\D/g,''))||1)));result.debts.push({id:crypto.randomUUID(),name:name.slice(0,80),total:Math.max(tot,bal),balance:bal||tot,installments:inst,due:parseFlexDate(get(colMap.due)||get(colMap.date))});}
-    continue;
-   }
-   if(kind==='goal'){
-    const target=Math.abs(parseFlexAmount(get(colMap.total)||get(colMap.amount)));
-    const saved=Math.abs(parseFlexAmount(get(colMap.saved)));
-    if(target>0)result.goals.push({id:crypto.randomUUID(),name:name.slice(0,80),target,saved:Math.min(target,saved),emoji:'🌱',deadline:parseFlexDate(get(colMap.due)||get(colMap.date),'')});
-    continue;
-   }
-   if(kind==='investment'){
-    const amt=Math.abs(parseFlexAmount(get(colMap.amount)||get(colMap.total)||get(colMap.balance)));
-    if(amt>0)result.investments.push({id:crypto.randomUUID(),name:name.slice(0,80),amount:amt,kind:catCell||'Renda fixa'});
-    continue;
-   }
-   const rawVal=get(colMap.amount)||get(colMap.total)||get(colMap.balance)||row.find((c,i)=>i!==colMap.name&&i!==colMap.date&&parseFlexAmount(c)!==0)||'';
-   const signed=parseFlexAmount(rawVal);if(!signed)continue;
-   let type=signed<0?'expense':'income';
-   if(/saida|despesa|debito|pagamento|gasto|compra/.test(typeCell))type='expense';
-   else if(/entrada|receita|credito|ganho|salario|venda/.test(typeCell))type='income';
-   else if(signed>0&&!/entrada|receita|credito|salario|freelance/.test(typeCell)&&!/salario|freela|recebimento|deposito|pix recebido/i.test(name)&&colMap.type<0){
-    const inferred=inferCategory(name,'expense');if(inferred!=='Outros'||/aluguel|mercado|conta|fatura|boleto|compra|pagamento/i.test(name))type='expense';
-   }
-   const matchedCat=categories.find(c=>norm(c)===norm(catCell))||inferCategory(name,type);
-   const dt=parseFlexDate(get(colMap.date)||get(colMap.due));
-   result.transactions.push({id:crypto.randomUUID(),name,amount:Math.abs(signed),type,category:matchedCat,date:dt});
-  }else{
-   const line=lines[r];
-   const instMatch=line.match(/\b(\d{1,3})\s*(?:x|parcelas?)\b/i);
-   const numMatches=[...line.matchAll(/(?:R\$\s*)?-?\d{1,3}(?:\.\d{3})*(?:,\d{1,2})|(?:R\$\s*)?-?\d+(?:\.\d{2})\b/g)];
-   const valStr=numMatches.at(-1)?.[0]||row.find(c=>parseFlexAmount(c)!==0);
-   const signed=parseFlexAmount(valStr);if(!signed)continue;
-   const dtMatch=line.match(/\b(\d{1,2}[\/.-]\d{1,2}(?:[\/.-]\d{2,4})?|\d{4}-\d{2}-\d{2})\b/);
-   const dt=parseFlexDate(dtMatch?.[1]);
-   const cleanName=line.replace(valStr,'').replace(dtMatch?.[0]||'','').replace(/\b\d{1,3}\s*(?:x|parcelas?)\b/gi,'').replace(/R\$|[;|\t]+|^[\s,-]+|[\s,-]+$/g,' ').replace(/\s+/g,' ').trim().slice(0,100)||'Lançamento importado';
-   if(/\b(d[ií]vida|empr[eé]stimo|financiamento|fatura)\b/i.test(line)||instMatch){
-    const inst=instMatch?Math.max(1,Math.min(360,Number(instMatch[1]))):1;
-    result.debts.push({id:crypto.randomUUID(),name:cleanName.replace(/^(d[ií]vida|parcelamento)\s*:?\s*/i,'').slice(0,80)||'Dívida importada',total:Math.abs(signed),balance:Math.abs(signed),installments:inst,due:dt});
-   }else if(/\b(meta|objetivo|reserva)\b/i.test(line)){
-    result.goals.push({id:crypto.randomUUID(),name:cleanName.replace(/^(meta|objetivo)\s*:?\s*/i,'').slice(0,80)||'Objetivo importado',target:Math.abs(signed),saved:0,emoji:'🌱',deadline:''});
-   }else{
-    const isIncome=/\b(sal[aá]rio|receita|entrada|recebi|freela|dep[oó]sito|rendimento)\b/i.test(line)&&signed>0;
-    const type=signed<0||!isIncome?'expense':'income';
-    result.transactions.push({id:crypto.randomUUID(),name:cleanName,amount:Math.abs(signed),type,category:inferCategory(cleanName,type),date:dt});
-   }
-  }
- }
+ const hasDelimiter=(sample.split(sep).length-1)>=lines.slice(0,Math.min(5,lines.length)).length;
+ const rows=lines.map(l=>hasDelimiter?splitCSVLine(l,sep):[l]);
+ parseTableRows(rows,result,fileName);
  return result;
 }
 export async function parseXlsxBuffer(buffer){
@@ -194,7 +311,7 @@ export async function parseXlsxBuffer(buffer){
   const method=view.getUint16(pos+10,true),compSize=view.getUint32(pos+20,true),nameLen=view.getUint16(pos+28,true),extraLen=view.getUint16(pos+30,true),commentLen=view.getUint16(pos+32,true),localOffset=view.getUint32(pos+42,true);
   const name=dec.decode(bytes.subarray(pos+46,pos+46+nameLen));
   pos+=46+nameLen+extraLen+commentLen;
-  if(!/^xl\/(sharedStrings\.xml|worksheets\/sheet\d+\.xml)$/.test(name))continue;
+  if(!/^xl\/(sharedStrings\.xml|styles\.xml|workbook\.xml|worksheets\/sheet\d+\.xml)$/.test(name))continue;
   const lNameLen=view.getUint16(localOffset+26,true),lExtraLen=view.getUint16(localOffset+28,true),dataStart=localOffset+30+lNameLen+lExtraLen;
   const slice=bytes.subarray(dataStart,dataStart+compSize);
   if(method===0)files[name]=dec.decode(slice);
@@ -210,25 +327,45 @@ export async function parseXlsxBuffer(buffer){
    shared.push(unescapeXML([...m[1].matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map(x=>x[1]).join('')));
   }
  }
+ const dateStyleIds=new Set();
+ if(files['xl/styles.xml']){
+  const customDateFmts=new Set([14,15,16,17,18,19,20,21,22,45,46,47]);
+  for(const m of files['xl/styles.xml'].matchAll(/<numFmt\b([^>]*)\/?>/g)){
+   const id=Number(m[1].match(/\bnumFmtId="(\d+)"/)?.[1]);
+   const code=m[1].match(/\bformatCode="([^"]+)"/)?.[1]||'';
+   if(id&&/[dmy]/i.test(code)&&!/[0#]/.test(code.replace(/\[[^\]]*\]/g,'')))customDateFmts.add(id);
+  }
+  const xfsSection=files['xl/styles.xml'].match(/<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/)?.[1]||'';
+  let idx=0;
+  for(const m of xfsSection.matchAll(/<xf\b([^>]*)\/?>/g)){
+   const fmtId=Number(m[1].match(/\bnumFmtId="(\d+)"/)?.[1]);
+   if(customDateFmts.has(fmtId))dateStyleIds.add(idx);
+   idx++;
+  }
+ }
  const colIdx=ref=>{let n=0;for(const ch of ref.replace(/\d+/g,''))n=n*26+(ch.charCodeAt(0)-64);return Math.max(0,n-1);};
- const lines=[];
- for(const [path,xml] of Object.entries(files)){
+ const result={transactions:[],debts:[],goals:[],investments:[],profile:{}};
+ for(const [path,xml] of Object.entries(files).sort((a,b)=>a[0].localeCompare(b[0]))){
   if(!path.startsWith('xl/worksheets/'))continue;
+  const sheetRows=[];
   for(const rm of xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)){
    const row=[];
    for(const cm of rm[1].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)){
     const attrs=cm[1],inner=cm[2];
     const ref=attrs.match(/\br="([A-Z]+\d+)"/)?.[1]||'A1';
     const type=attrs.match(/\bt="([^"]+)"/)?.[1]||'';
+    const styleIdx=Number(attrs.match(/\bs="(\d+)"/)?.[1]);
     const vMatch=inner.match(/<v>([\s\S]*?)<\/v>/),isMatch=inner.match(/<is>[\s\S]*?<t\b[^>]*>([\s\S]*?)<\/t>[\s\S]*?<\/is>/);
     let val=isMatch?unescapeXML(isMatch[1]):vMatch?unescapeXML(vMatch[1]):'';
     if(type==='s'&&val!=='')val=shared[Number(val)]??val;
-    row[colIdx(ref)]=String(val).replace(/;/g,',');
+    else if((!type||type==='n')&&val!==''&&dateStyleIds.has(styleIdx)&&isExcelSerialDate(val))val=excelSerialToISO(Number(val));
+    row[colIdx(ref)]=String(val??'').trim();
    }
-   if(row.some(c=>c&&String(c).trim()))lines.push(Array.from({length:row.length},(_,i)=>row[i]??'').join(';'));
+   if(row.some(c=>c&&String(c).trim()))sheetRows.push(Array.from({length:row.length},(_,i)=>row[i]??''));
   }
+  parseTableRows(sheetRows,result,path);
  }
- return parseDocumentContent(lines.join('\n'),'planilha.xlsx');
+ return result;
 }
 export async function importDocumentFile(file){
  const name=String(file?.name||'documento');
@@ -247,12 +384,7 @@ export async function importDocumentFile(file){
  const totalItems=parsed.transactions.length+parsed.debts.length+parsed.goals.length+parsed.investments.length;
  return {...parsed,fileName:name,totalItems};
 }
-export function applyImportedData(state,imported){
- if(imported.profile?.name&&!state.profile.name)state.profile.name=imported.profile.name;
- state.transactions.push(...(imported.transactions||[]));
- state.debts.push(...(imported.debts||[]));
- state.goals.push(...(imported.goals||[]));
- state.investments.push(...(imported.investments||[]));
+export function describeImportedData(imported){
  const parts=[];
  if(imported.transactions?.length)parts.push(`${imported.transactions.length} ${imported.transactions.length===1?'lançamento':'lançamentos'}`);
  if(imported.debts?.length)parts.push(`${imported.debts.length} ${imported.debts.length===1?'dívida':'dívidas'}`);
@@ -260,23 +392,62 @@ export function applyImportedData(state,imported){
  if(imported.investments?.length)parts.push(`${imported.investments.length} ${imported.investments.length===1?'investimento':'investimentos'}`);
  return parts.join(', ');
 }
-export function tryChatCommand(question){
+export function applyImportedData(state,imported){
+ if(imported.profile?.name&&!state.profile.name)state.profile.name=imported.profile.name;
+ state.transactions.push(...(imported.transactions||[]));
+ state.debts.push(...(imported.debts||[]));
+ state.goals.push(...(imported.goals||[]));
+ state.investments.push(...(imported.investments||[]));
+ return describeImportedData(imported);
+}
+export function tryChatCommand(question,state){
  const q=String(question||'').trim();if(!q)return null;
- const amtMatch=q.match(/(?:R\$\s*)?(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})|\d+(?:[.,]\d{1,2})?)/);
- if(!amtMatch)return null;
- const amount=Math.abs(parseFlexAmount(amtMatch[1]));if(!amount)return null;
- if(/^(?:adicion(?:e|ar)|cri(?:e|ar)|registr(?:e|ar)|lan[cç](?:e|ar)|tenho)?\s*(?:uma?\s+)?d[ií]vida\b/i.test(q)){
-  const instMatch=q.match(/\b(\d{1,3})\s*(?:x|parcelas?)\b/i);
-  const inst=instMatch?Math.max(1,Math.min(360,Number(instMatch[1]))):1;
-  const name=q.replace(/^(?:adicion(?:e|ar)|cri(?:e|ar)|registr(?:e|ar)|lan[cç](?:e|ar)|tenho)?\s*(?:uma?\s+)?d[ií]vida\s*(?:de|do|da|no|na)?\s*/i,'').replace(amtMatch[0],'').replace(/\b(?:em\s*)?\d{1,3}\s*(?:x|parcelas?)\b/gi,'').replace(/\b(?:de|por|valor|reais|R\$)\b/gi,'').replace(/\s+/g,' ').trim().slice(0,80)||'Nova dívida';
-  return {kind:'debt',item:{id:crypto.randomUUID(),name,total:amount,balance:amount,installments:inst,due:dateISO()},reply:`Pronto! Adicionei a dívida **${name}** no valor de **${money(amount)}** em **${inst}x** no seu painel.`};
+ // Excluir dívida ou lançamento por comando
+ const delDebtMatch=q.match(/^(?:exclu(?:a|ir)|apag(?:ue|ar)|remov(?:a|er)|delet(?:e|ar))\s+(?:a\s+)?d[ií]vida\s+(.+)$/i);
+ if(delDebtMatch&&state?.debts?.length){
+  const target=normStr(delDebtMatch[1]);
+  const found=state.debts.find(d=>normStr(d.name).includes(target)||target.includes(normStr(d.name)));
+  if(found)return {kind:'delete-debt',id:found.id,reply:`Pronto! Excluí a dívida "${found.name}" (${money(found.balance)}) do seu painel.`};
  }
- if(/^(?:gastei|paguei|comprei|despesa|sa[ií]da|recebi|ganhei|entrada|sal[aá]rio)\b/i.test(q)){
-  const isIncome=/^(?:recebi|ganhei|entrada|sal[aá]rio)\b/i.test(q);
+ const delTxMatch=q.match(/^(?:exclu(?:a|ir)|apag(?:ue|ar)|remov(?:a|er)|delet(?:e|ar))\s+(?:o\s+)?(?:lan[cç]amento|gasto|despesa|receita)\s+(.+)$/i);
+ if(delTxMatch&&state?.transactions?.length){
+  const target=normStr(delTxMatch[1]);
+  const found=state.transactions.find(t=>!t.linked&&(normStr(t.name).includes(target)||target.includes(normStr(t.name))));
+  if(found)return {kind:'delete-transaction',id:found.id,reply:`Pronto! Excluí o lançamento "${found.name}" (${money(found.amount)}) e recalculei seu saldo.`};
+ }
+ // Se for uma pergunta informativa sem intenção de cadastro, deixa para a análise responder
+ if(/\?$/.test(q)||/^(?:quanto|quais|qual|como|onde|por\s*que|analise|resumo|mostre|me\s+mostre|explique|calcule|simule)\b/i.test(q))return null;
+ const withoutInstallments=q.replace(/\b\d{1,3}\s*(?:x|parcelas?|vezes)\b/gi,' ').replace(/\b\d{1,2}[\/.-]\d{1,2}(?:[\/.-]\d{2,4})?\b/g,' ');
+ const amtMatches=[...withoutInstallments.matchAll(/(?:R\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/g)];
+ if(!amtMatches.length)return null;
+ const amtToken=amtMatches.at(-1)[1];
+ const amount=Math.abs(parseFlexAmount(amtToken));if(!amount)return null;
+ const cleanLabel=raw=>raw.replace(amtMatches.at(-1)[0],'').replace(/\b(?:em\s*)?\d{1,3}\s*(?:x|parcelas?|vezes)\b/gi,'').replace(/\b(?:adicion(?:e|ar)|cri(?:e|ar)|registr(?:e|ar)|lan[cç](?:e|ar)|cadastr(?:e|ar)|coloc(?:a|ar)|tenho|quero|uma?|novo|nova|d[ií]vida|meta|objetivo|investimento|investi|apliquei|gastei|paguei|comprei|despesa|sa[ií]da|gasto|recebi|ganhei|entrada|receita|sal[aá]rio|reais|real|R\$|no|na|de|do|da|com|em|por|para|valor|hoje)\b/gi,' ').replace(/[:;,-]+/g,' ').replace(/\s+/g,' ').trim();
+ if(/\b(d[ií]vida|empr[eé]stimo|financiamento|parcelado|parcelas?)\b/i.test(q)&&!/\b(paguei\s+a\s+parcela|quitei)\b/i.test(q)){
+  const instMatch=q.match(/\b(\d{1,3})\s*(?:x|parcelas?|vezes)\b/i);
+  const inst=instMatch?Math.max(1,Math.min(360,Number(instMatch[1]))):1;
+  const name=(cleanLabel(q)||'Cartão / Dívida').slice(0,80);
+  const label=name.charAt(0).toUpperCase()+name.slice(1);
+  return {kind:'debt',item:{id:crypto.randomUUID(),name:label,total:amount,balance:amount,installments:inst,due:dateISO()},reply:`Pronto! Cadastrei a dívida "${label}" de ${money(amount)} em ${inst}x (${money(Math.round(amount/inst))} por parcela) em Minhas dívidas.`};
+ }
+ if(/\b(meta|objetivo|sonho|juntar\s+para)\b/i.test(q)){
+  const name=(cleanLabel(q)||'Minha meta').slice(0,80);
+  const label=name.charAt(0).toUpperCase()+name.slice(1);
+  return {kind:'goal',item:{id:crypto.randomUUID(),name:label,target:amount,saved:0,emoji:'🌱',deadline:''},reply:`Pronto! Criei o objetivo "${label}" com meta de ${money(amount)} em Meus objetivos.`};
+ }
+ if(/\b(investi|apliquei|investimento|aplicar\s+em|aporte\s+em)\b/i.test(q)){
+  const name=(cleanLabel(q)||'Aporte').slice(0,80);
+  const label=name.charAt(0).toUpperCase()+name.slice(1);
+  const kind=/a[cç][oõ]es/i.test(q)?'Ações':/fundo|fii/i.test(q)?'Fundos':'Renda fixa';
+  return {kind:'investment',item:{id:crypto.randomUUID(),name:label,amount,kind},reply:`Pronto! Registrei o investimento "${label}" de ${money(amount)} (${kind}) e atualizei seu saldo.`};
+ }
+ if(/\b(gastei|paguei|comprei|despesa|sa[ií]da|gasto|recebi|ganhei|entrada|receita|sal[aá]rio|freela|freelance|lance|lan[cç]ar|adicione|adicionar|registre|registrar)\b/i.test(q)){
+  const isIncome=/\b(recebi|ganhei|entrada|receita|sal[aá]rio|freela|freelance)\b/i.test(q)&&!/\b(gastei|paguei|despesa|sa[ií]da)\b/i.test(q);
   const type=isIncome?'income':'expense';
-  const name=q.replace(/^(?:gastei|paguei|comprei|despesa|sa[ií]da|recebi|ganhei|entrada)\s*/i,'').replace(amtMatch[0],'').replace(/\b(?:reais|R\$|no|na|de|do|da|com|em|hoje)\b/gi,' ').replace(/\s+/g,' ').trim().slice(0,100)||(isIncome?'Entrada registrada':'Despesa registrada');
-  const category=inferCategory(name,type);
-  return {kind:'transaction',item:{id:crypto.randomUUID(),name:name.charAt(0).toUpperCase()+name.slice(1),amount,type,category,date:dateISO()},reply:`Registrado! Lancei **${name.charAt(0).toUpperCase()+name.slice(1)}** (${type==='income'?'Entrada':'Saída'} de **${money(amount)}** na categoria **${category}**) e já atualizei seu painel.`};
+  const rawName=cleanLabel(q)||(/sal[aá]rio/i.test(q)?'Salário':/freela/i.test(q)?'Freelance':isIncome?'Entrada':'Despesa');
+  const label=(rawName.charAt(0).toUpperCase()+rawName.slice(1)).slice(0,100);
+  const category=inferCategory(label+' '+q,type);
+  return {kind:'transaction',item:{id:crypto.randomUUID(),name:label,amount,type,category,date:dateISO()},reply:`Registrado! Lancei "${label}" (${type==='income'?'Entrada':'Saída'} de ${money(amount)} na categoria ${category}) e já atualizei seu painel.`};
  }
  return null;
 }

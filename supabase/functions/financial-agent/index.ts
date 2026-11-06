@@ -17,29 +17,46 @@ function buildSmartAnswer(question:string,state:Record<string,any>):string{
   const totalDebt=debts.reduce((a:number,d:any)=>a+(Number(d.balance)||0),0);
   const totalSaved=goals.reduce((a:number,g:any)=>a+(Number(g.saved)||0),0);
   const totalInvested=investments.reduce((a:number,i:any)=>a+(Number(i.amount)||0),0);
-  if(/gastei|gastos|gasto|despesa|resumo|saldo/.test(q)){
-    const byCat:Record<string,number>={};
-    for(const t of monthTx.filter((x:any)=>x.type==='expense'))byCat[t.category]=(byCat[t.category]||0)+(Number(t.amount)||0);
-    const top=Object.entries(byCat).sort((a,b)=>b[1]-a[1])[0];
-    return `Neste mês (${month}), você registrou ${money(income)} em entradas e ${money(expense)} em saídas. Seu saldo disponível total na conta é ${money(totalBalance)}.\n\n${top?`Sua maior categoria de gastos no mês é ${top[0]} (${money(top[1])}).`:'Você ainda não registrou saídas neste mês.'} Se quiser, pode anexar uma planilha (.xlsx, .csv) ou extrato (.ofx) pelo botão Anexar para atualizar seus lançamentos automaticamente.`;
+  const byCatMap:Record<string,number>={};
+  for(const t of monthTx.filter((x:any)=>x.type==='expense'))byCatMap[t.category]=(byCatMap[t.category]||0)+(Number(t.amount)||0);
+  const byCat=Object.entries(byCatMap).sort((a,b)=>b[1]-a[1]);
+  const top=byCat[0];
+  const balance=income-expense;
+  if(/organizar|orçamento|orcamento|planejar|ajuda|dica|como começar|como comecar|analise|análise|diagnóstico|diagnostico/.test(q)){
+    const lines=[`Aqui está o diagnóstico e plano prático para organizar seu orçamento hoje:`,
+      `1. Fluxo do mês (${month}): você recebeu ${money(income)} e gastou ${money(expense)} (saldo mensal de ${money(balance)} e caixa total de ${money(totalBalance)}).`];
+    if(top)lines.push(`2. Onde ajustar primeiro: sua maior categoria de saída é ${top[0]} (${money(top[1])}). Reduzir 15% nessa categoria libera ${money(Math.round(top[1]*0.15))}/mês.`);
+    if(totalDebt>0){
+      const d=debts.filter((x:any)=>Number(x.balance)>0)[0];
+      const count=Math.max(1,Number(d?.installments)||1);
+      lines.push(`3. Dívidas (${money(totalDebt)}): priorize ${d.name} (${count}x de ${money(Math.round((Number(d.total)||Number(d.balance))/count))}) antes de novos gastos parcelados.`);
+    }else{
+      lines.push(`3. Dívidas: você não possui dívidas abertas registradas — excelente base para poupar.`);
+    }
+    lines.push(`4. Próximo passo: você pode me mandar lançamentos direto por aqui (ex.: "Gastei 60 na farmácia", "Dívida cartão 1200 em 6x") ou anexar sua planilha (.xlsx/.csv) para atualizar o painel.`);
+    return lines.join('\n');
+  }
+  if(/gastei|gastos|gasto|despesa|resumo|saldo|categoria|maior/.test(q)){
+    const catList=byCat.slice(0,3).map(([c,v])=>`${c} (${money(v)})`).join(', ');
+    return `Neste mês (${month}), você registrou ${money(income)} em entradas e ${money(expense)} em saídas, deixando ${money(balance)} no mês e ${money(totalBalance)} de saldo disponível na conta.\n\n${catList?`Maiores categorias de gastos no mês: ${catList}.`:'Você ainda não registrou saídas neste mês.'}`;
   }
   if(/divida|dívida|quitar|pagar|cartão|parcela/.test(q)){
     const active=debts.filter((d:any)=>Number(d.balance)>0).sort((a:any,b:any)=>String(a.due||'').localeCompare(String(b.due||'')));
     const d=active[0];
     if(!d)return 'Você não tem dívidas em aberto registradas na sua conta. Pode cadastrar em Minhas dívidas, me dizer por aqui (ex.: "Dívida cartão 1200 em 6x") ou anexar sua planilha.';
     const count=Math.max(1,Number(d.installments)||1);
-    return `Suas dívidas em aberto somam ${money(totalDebt)}. O próximo compromisso é ${d.name}, parcelado em ${count}x (${money(Math.round((Number(d.total)||Number(d.balance))/count))} por parcela), com saldo em aberto de ${money(d.balance)}.`;
+    return `Suas dívidas em aberto somam ${money(totalDebt)} (${active.length} registro${active.length>1?'s':''}). O próximo compromisso é ${d.name}, parcelado em ${count}x (${money(Math.round((Number(d.total)||Number(d.balance))/count))} por parcela), com saldo em aberto de ${money(d.balance)}.`;
   }
   if(/meta|juntar|economizar|guardar|reserva|viagem|objetivo/.test(q)){
     const g=goals.find((x:any)=>Number(x.saved)<Number(x.target));
-    if(!g)return `Você tem ${money(totalSaved)} guardados em objetivos. Crie uma nova meta em Meus objetivos ou anexe sua planilha financeira.`;
+    if(!g)return `Você tem ${money(totalSaved)} guardados em objetivos. Crie uma nova meta dizendo "Criar meta Reserva de 10000" ou pela aba Meus objetivos.`;
     const rem=Math.max(0,Number(g.target)-Number(g.saved));
     return `Para o objetivo ${g.name}, você já guardou ${money(g.saved)} de ${money(g.target)}. Faltam ${money(rem)} (cerca de ${money(Math.ceil(rem/12))} por mês em 12 meses).`;
   }
-  if(/invest|rende|rendimento|aplicar/.test(q)){
-    return `Seu patrimônio registrado em investimentos soma ${money(totalInvested)}. Use o simulador na aba Investimentos para projetar aportes mensais no seu prazo.`;
+  if(/invest|rende|rendimento|aplicar|selic|cdb|tesouro/.test(q)){
+    return `Seu patrimônio registrado em investimentos soma ${money(totalInvested)}. Você pode registrar novos aportes pelo chat (ex.: "Investi 500 em Tesouro Selic") ou usar o simulador na aba Investimentos.`;
   }
-  return `Analisei os dados da sua conta: você tem ${money(totalBalance)} de saldo disponível, ${money(income)} em entradas e ${money(expense)} em saídas neste mês, ${money(totalSaved)} em objetivos e ${money(totalDebt)} em dívidas.\n\nVocê pode me perguntar sobre gastos, metas e dívidas, registrar movimentações pelo chat (ex.: "Gastei 85 no mercado") ou clicar em Anexar para importar uma planilha (.xlsx, .csv, .ofx) e atualizar seu painel automaticamente!`;
+  return `Resumo atual da sua conta:\n• Saldo disponível: ${money(totalBalance)}\n• Mês atual (${month}): ${money(income)} de entradas e ${money(expense)} de saídas${top?` (maior gasto: ${top[0]} com ${money(top[1])})`:''}\n• Objetivos: ${money(totalSaved)} guardados | Dívidas: ${money(totalDebt)} | Investimentos: ${money(totalInvested)}\n\nComo posso agir por você agora:\n• Registrar pelo chat: "Gastei 85 no mercado", "Recebi 2500 de salário", "Dívida cartão 1200 em 6x", "Criar meta Viagem de 5000"\n• Importar arquivos: clique no botão Anexar aqui no chat ou no topo do painel para enviar sua planilha (.xlsx, .csv, .ofx).`;
 }
 
 Deno.serve(async(req:Request)=>{
