@@ -107,6 +107,20 @@ Deno.serve(async(req:Request)=>{
       }
       return respond({ok:true,sent});
     }
+    if(body.action==='transcribe_audio'&&typeof body.audio==='string'){
+      if(!apiKey)return respond({error:'Transcrição em nuvem requer OPENAI_API_KEY ou uso do microfone do navegador.'},400);
+      const binStr=atob(body.audio.replace(/^data:[^;]+;base64,/,''));
+      const bytes=new Uint8Array(binStr.length);
+      for(let i=0;i<binStr.length;i++)bytes[i]=binStr.charCodeAt(i);
+      const form=new FormData();
+      form.append('file',new Blob([bytes],{type:String(body.mimeType||'audio/webm')}),String(body.fileName||'audio.webm'));
+      form.append('model','whisper-1');
+      form.append('language','pt');
+      const tr=await fetch('https://api.openai.com/v1/audio/transcriptions',{method:'POST',headers:{Authorization:`Bearer ${apiKey}`},body:form,signal:AbortSignal.timeout(30000)});
+      if(!tr.ok)return respond({error:'Não foi possível transcrever o áudio.'},502);
+      const tj=await tr.json();
+      return respond({text:String(tj.text||'').trim()});
+    }
     if(typeof body.message!=='string'||!body.message.trim()||body.message.length>2000)return respond({error:'Envie uma mensagem de até 2.000 caracteres.'},400);
     const dataResponse=await fetch(`${url}/rest/v1/finance_data?user_id=eq.${user.id}&select=data`,{headers:authHeaders,signal:AbortSignal.timeout(10000)});
     if(!dataResponse.ok)return respond({error:'Não foi possível ler os dados financeiros.'},502);

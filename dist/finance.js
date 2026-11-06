@@ -457,29 +457,33 @@ export function applyImportedData(state,imported){
  state.investments.push(...(imported.investments||[]));
  return describeImportedData(imported);
 }
-export function tryChatCommand(question,state){
- const q=String(question||'').trim();if(!q)return null;
- // Excluir dívida ou lançamento por comando
- const delDebtMatch=q.match(/^(?:exclu(?:a|ir)|apag(?:ue|ar)|remov(?:a|er)|delet(?:e|ar))\s+(?:a\s+)?d[ií]vida\s+(.+)$/i);
- if(delDebtMatch&&state?.debts?.length){
-  const target=normStr(delDebtMatch[1]);
-  const found=state.debts.find(d=>normStr(d.name).includes(target)||target.includes(normStr(d.name)));
-  if(found)return {kind:'delete-debt',id:found.id,reply:`Pronto! Excluí a dívida "${found.name}" (${money(found.balance)}) do seu painel.`};
- }
- const delTxMatch=q.match(/^(?:exclu(?:a|ir)|apag(?:ue|ar)|remov(?:a|er)|delet(?:e|ar))\s+(?:o\s+)?(?:lan[cç]amento|gasto|despesa|receita)\s+(.+)$/i);
- if(delTxMatch&&state?.transactions?.length){
-  const target=normStr(delTxMatch[1]);
-  const found=state.transactions.find(t=>!t.linked&&(normStr(t.name).includes(target)||target.includes(normStr(t.name))));
-  if(found)return {kind:'delete-transaction',id:found.id,reply:`Pronto! Excluí o lançamento "${found.name}" (${money(found.amount)}) e recalculei seu saldo.`};
- }
- // Se for uma pergunta informativa sem intenção de cadastro, deixa para a análise responder
- if(/\?$/.test(q)||/^(?:quanto|quais|qual|como|onde|por\s*que|analise|resumo|mostre|me\s+mostre|explique|calcule|simule)\b/i.test(q))return null;
+export function normalizeSpokenPortuguese(raw){
+ let s=String(raw||'').trim();if(!s)return '';
+ const words={um:1,uma:1,dois:2,duas:2,tres:3,'três':3,quatro:4,cinco:5,seis:6,sete:7,oito:8,nove:9,dez:10,onze:11,doze:12,treze:13,quatorze:14,catorze:14,quinze:15,dezesseis:16,dezessete:17,dezoito:18,dezenove:19,vinte:20,trinta:30,quarenta:40,cinquenta:50,sessenta:60,setenta:70,oitenta:80,noventa:90,cem:100,cento:100,duzentos:200,duzentas:200,trezentos:300,trezentas:300,quatrocentos:400,quatrocentas:400,quinhentos:500,quinhentas:500,seiscentos:600,seiscentas:600,setecentos:700,setecentas:700,oitocentos:800,oitocentas:800,novecentos:900,novecentas:900};
+ const numTok=Object.keys(words).join('|');
+ const numSeq=new RegExp(`\\b((?:(?:${numTok}|mil)(?:\\s+e\\s+|\\s+))*(?:${numTok}|mil))\\b`,'gi');
+ s=s.replace(numSeq,match=>{
+  const tokens=match.toLowerCase().split(/\s+/).filter(t=>t!=='e');
+  let total=0,curr=0,used=false;
+  for(const t of tokens){
+   if(t==='mil'){curr=(curr||1)*1000;total+=curr;curr=0;used=true;}
+   else if(words[t]!==undefined){curr+=words[t];used=true;}
+  }
+  return used?String(total+curr):match;
+ });
+ s=s.replace(/(\d+)\s+mil(?:\s+e\s+|\s+)(\d+)/gi,(_,a,b)=>String(Number(a)*1000+Number(b)));
+ s=s.replace(/(\d+)\s+mil\b/gi,(_,a)=>String(Number(a)*1000));
+ s=s.replace(/(\d+)\s*(?:reais?\s+)?(?:e|com|vírgula|virgula)\s*(\d{1,2})\s*(?:centavos?)?\b/gi,(_,r,c)=>`${r},${c.padStart(2,'0')}`);
+ return s;
+}
+function parseSingleChatClause(rawClause,state){
+ const q=normalizeSpokenPortuguese(rawClause).trim();if(!q)return null;
  const withoutInstallments=q.replace(/\b\d{1,3}\s*(?:x|parcelas?|vezes)\b/gi,' ').replace(/\b\d{1,2}[\/.-]\d{1,2}(?:[\/.-]\d{2,4})?\b/g,' ');
  const amtMatches=[...withoutInstallments.matchAll(/(?:R\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/g)];
  if(!amtMatches.length)return null;
  const amtToken=amtMatches.at(-1)[1];
  const amount=Math.abs(parseFlexAmount(amtToken));if(!amount)return null;
- const cleanLabel=raw=>raw.replace(amtMatches.at(-1)[0],'').replace(/\b(?:em\s*)?\d{1,3}\s*(?:x|parcelas?|vezes)\b/gi,'').replace(/\b(?:adicion(?:e|ar)|cri(?:e|ar)|registr(?:e|ar)|lan[cç](?:e|ar)|cadastr(?:e|ar)|coloc(?:a|ar)|tenho|quero|uma?|novo|nova|d[ií]vida|meta|objetivo|investimento|investi|apliquei|gastei|paguei|comprei|despesa|sa[ií]da|gasto|recebi|ganhei|entrada|receita|sal[aá]rio|reais|real|R\$|no|na|de|do|da|com|em|por|para|valor|hoje)\b/gi,' ').replace(/[:;,-]+/g,' ').replace(/\s+/g,' ').trim();
+ const cleanLabel=raw=>raw.replace(amtMatches.at(-1)[0],'').replace(/\b(?:em\s*)?\d{1,3}\s*(?:x|parcelas?|vezes)\b/gi,'').replace(/\b(?:adicion(?:e|ar)|cri(?:e|ar)|registr(?:e|ar)|lan[cç](?:e|ar)|cadastr(?:e|ar)|coloc(?:a|ar)|tenho|quero|uma?|uns|umas|novo|nova|d[ií]vida|meta|objetivo|investimento|investi|apliquei|gastei|paguei|comprei|saiu|custou|passei|transferi|mandei|foi|deu|despesa|sa[ií]da|gasto|recebi|ganhei|entrou|caiu|faturei|vendi|pagaram|me|entrada|receita|sal[aá]rio|reais|real|centavos?|R\$|no|na|nos|nas|de|do|da|dos|das|com|em|por|para|pelo|pela|valor|hoje|ontem|agora|pix|cart[aã]o|d[eé]bito)\b/gi,' ').replace(/[:;,-]+/g,' ').replace(/\s+/g,' ').trim();
  if(/\b(limit(?:ar|e)|teto\s+de\s+gasto)\b/i.test(q)){
   const name=(cleanLabel(q).replace(/\b(?:limit(?:ar|e)|teto|gasto|gastos|mensal|ate|até|para)\b/gi,' ').replace(/\s+/g,' ').trim()||'Gasto específico').slice(0,80);
   const label=name.charAt(0).toUpperCase()+name.slice(1);
@@ -513,8 +517,8 @@ export function tryChatCommand(question,state){
   const kind=/a[cç][oõ]es/i.test(q)?'Ações':/fundo|fii/i.test(q)?'Fundos':'Renda fixa';
   return {kind:'investment',item:{id:crypto.randomUUID(),name:label,amount,kind},reply:`Pronto! Registrei o investimento "${label}" de ${money(amount)} (${kind}) e atualizei seu saldo.`};
  }
- if(/\b(gastei|paguei|comprei|despesa|sa[ií]da|gasto|recebi|ganhei|entrada|receita|sal[aá]rio|freela|freelance|lance|lan[cç]ar|adicione|adicionar|registre|registrar)\b/i.test(q)){
-  const isIncome=/\b(recebi|ganhei|entrada|receita|sal[aá]rio|freela|freelance)\b/i.test(q)&&!/\b(gastei|paguei|despesa|sa[ií]da)\b/i.test(q);
+ if(/\b(gastei|paguei|comprei|saiu|custou|passei|transferi|mandei|foi|deu|despesa|sa[ií]da|gasto|recebi|ganhei|entrou|caiu|faturei|vendi|pagaram|reembolso|entrada|receita|sal[aá]rio|freela|freelance|lance|lan[cç]ar|adicione|adicionar|registre|registrar)\b/i.test(q)){
+  const isIncome=/\b(recebi|ganhei|entrou|caiu|faturei|vendi|pagaram|reembolso|entrada|receita|sal[aá]rio|freela|freelance)\b/i.test(q)&&!/\b(gastei|paguei|comprei|saiu|custou|despesa|sa[ií]da)\b/i.test(q);
   const type=isIncome?'income':'expense';
   const rawName=cleanLabel(q)||(/sal[aá]rio/i.test(q)?'Salário':/freela/i.test(q)?'Freelance':isIncome?'Entrada':'Despesa');
   const label=(rawName.charAt(0).toUpperCase()+rawName.slice(1)).slice(0,100);
@@ -522,4 +526,35 @@ export function tryChatCommand(question,state){
   return {kind:'transaction',item:{id:crypto.randomUUID(),name:label,amount,type,category,date:dateISO()},reply:`Registrado! Lancei "${label}" (${type==='income'?'Entrada':'Saída'} de ${money(amount)} na categoria ${category}) e já atualizei seu painel.`};
  }
  return null;
+}
+export function tryChatCommand(question,state){
+ const rawQ=String(question||'').replace(/^🎙️\s*[ÁA]udio:\s*/i,'').replace(/^["“”]|["“”]$/g,'').trim();
+ if(!rawQ)return null;
+ const q=normalizeSpokenPortuguese(rawQ);
+ // Excluir dívida ou lançamento por comando
+ const delDebtMatch=q.match(/^(?:exclu(?:a|ir)|apag(?:ue|ar)|remov(?:a|er)|delet(?:e|ar))\s+(?:a\s+)?d[ií]vida\s+(.+)$/i);
+ if(delDebtMatch&&state?.debts?.length){
+  const target=normStr(delDebtMatch[1]);
+  const found=state.debts.find(d=>normStr(d.name).includes(target)||target.includes(normStr(d.name)));
+  if(found)return {kind:'delete-debt',id:found.id,reply:`Pronto! Excluí a dívida "${found.name}" (${money(found.balance)}) do seu painel.`};
+ }
+ const delTxMatch=q.match(/^(?:exclu(?:a|ir)|apag(?:ue|ar)|remov(?:a|er)|delet(?:e|ar))\s+(?:o\s+)?(?:lan[cç]amento|gasto|despesa|receita)\s+(.+)$/i);
+ if(delTxMatch&&state?.transactions?.length){
+  const target=normStr(delTxMatch[1]);
+  const found=state.transactions.find(t=>!t.linked&&(normStr(t.name).includes(target)||target.includes(normStr(t.name))));
+  if(found)return {kind:'delete-transaction',id:found.id,reply:`Pronto! Excluí o lançamento "${found.name}" (${money(found.amount)}) e recalculei seu saldo.`};
+ }
+ // Se for uma pergunta informativa sem intenção de cadastro, deixa para a análise responder
+ if(/\?$/.test(q)||/^(?:quanto|quais|qual|como|onde|por\s*que|analise|resumo|mostre|me\s+mostre|explique|calcule|simule)\b/i.test(q))return null;
+ // Suporte a múltiplos lançamentos na mesma fala/mensagem (ex.: "gastei 50 no mercado e recebi 200 de freela")
+ const parts=q.split(/\s+(?:e\s+tamb[eé]m|e\s+(?=(?:gastei|paguei|comprei|saiu|recebi|ganhei|entrou|caiu|faturei|vendi)\b)|;\s*)/i).map(s=>s.trim()).filter(Boolean);
+ if(parts.length>1){
+  const parsedItems=parts.map(p=>parseSingleChatClause(p,state)).filter(p=>p&&p.kind==='transaction');
+  if(parsedItems.length>1){
+   const items=parsedItems.map(p=>p.item);
+   const summary=items.map(t=>`• ${t.type==='income'?'+':'−'} ${money(t.amount)} — ${t.name} (${t.category})`).join('\n');
+   return {kind:'transactions',items,reply:`Reconheci ${items.length} movimentações no seu áudio/mensagem e atualizei seu painel:\n${summary}`};
+  }
+ }
+ return parseSingleChatClause(q,state);
 }

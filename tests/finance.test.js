@@ -75,3 +75,23 @@ test('monitora limite de gasto específico e gera alerta de WhatsApp/E-mail',()=
  assert.ok(msg.includes('LIMITE ATINGIDO'));
  assert.ok(msg.includes('Uber'));
 });
+test('reconhece comandos por áudio com números por extenso, centavos falados e múltiplos lançamentos',()=>{
+ const audioExp=tryChatCommand('🎙️ Áudio: "Gastei oitenta e cinco reais e cinquenta centavos na padaria"');
+ assert.equal(audioExp.kind,'transaction');
+ assert.equal(audioExp.item.type,'expense');
+ assert.equal(audioExp.item.amount,8550);
+ assert.equal(audioExp.item.name,'Padaria');
+ assert.equal(audioExp.item.category,'Alimentação');
+ const audioInc=tryChatCommand('🎙️ Áudio: "Recebi dois mil e quinhentos reais de salário"');
+ assert.equal(audioInc.kind,'transaction');
+ assert.equal(audioInc.item.type,'income');
+ assert.equal(audioInc.item.amount,250000);
+ assert.equal(audioInc.item.category,'Salário');
+ const multi=tryChatCommand('🎙️ Áudio: "Gastei 45 e 90 no Uber e recebi 300 de freela"');
+ assert.equal(multi.kind,'transactions');
+ assert.equal(multi.items.length,2);
+ assert.equal(multi.items[0].amount,4590);
+ assert.equal(multi.items[0].type,'expense');
+ assert.equal(multi.items[1].amount,30000);
+ assert.equal(multi.items[1].type,'income');
+});

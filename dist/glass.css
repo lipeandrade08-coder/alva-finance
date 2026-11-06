@@ -108,3 +108,8 @@ body{background:#eef3e8;background-image:radial-gradient(ellipse at 88% 8%,#cce5
 @media(max-width:480px){
  .stat-sparkline{display:none}
 }
+.voice-status-bar{display:flex;align-items:center;gap:10px;padding:10px 16px;background:linear-gradient(135deg,#fff3f0,#fef8f6);border-top:1px solid #f2d2ca;font-size:12px;color:#993b2b;font-weight:550}
+.voice-status-bar #voice-live-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.voice-dot{width:9px;height:9px;border-radius:50%;background:#d94838;box-shadow:0 0 0 4px #d9483833;animation:voice-pulse 1.2s ease-in-out infinite;flex-shrink:0}
+.button.voice-active{background:linear-gradient(135deg,#c94738,#a63326)!important;border-color:#a63326!important;color:#fff!important;box-shadow:0 0 0 4px rgba(201,71,56,.2)}
+@keyframes voice-pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.25);opacity:.65}}
