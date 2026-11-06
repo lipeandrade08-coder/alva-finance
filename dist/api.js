@@ -1,11 +1,11 @@
-const SESSION_KEY='alva-auth-session-v1';
-function read(key,storage){try{return JSON.parse(storage.getItem(key)||'null');}catch{return null;}}
-export let session=read(SESSION_KEY,sessionStorage);
+const SESSION_KEY='alva-auth-session-v1',SESSION_TTL=7*24*60*60*1000;
+function readSession(){try{const raw=localStorage.getItem(SESSION_KEY)||sessionStorage.getItem(SESSION_KEY);const data=JSON.parse(raw||'null');if(data?.saved_until&&Date.now()>data.saved_until){localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);return null;}return data;}catch{return null;}}
+export let session=readSession();
 let refreshPromise;
 export function getConfig(){return {...(window.ALVA_CONFIG||{})};}
 export function configured(){const c=getConfig();return Boolean(c.supabaseUrl&&c.supabasePublicKey);}
-export function forgetSession(){session=null;sessionStorage.removeItem(SESSION_KEY);}
-function saveSession(data){if(!data?.access_token||!data?.refresh_token)throw new Error('Não foi possível iniciar a sessão. Entre novamente.');session={...data,expires_at:Number(data.expires_at)||Math.floor(Date.now()/1000)+(Number(data.expires_in)||3600)};sessionStorage.setItem(SESSION_KEY,JSON.stringify(session));}
+export function forgetSession(){session=null;localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);}
+function saveSession(data){if(!data?.access_token||!data?.refresh_token)throw new Error('Não foi possível iniciar a sessão. Entre novamente.');session={...data,expires_at:Number(data.expires_at)||Math.floor(Date.now()/1000)+(Number(data.expires_in)||3600),saved_until:Number(data.saved_until)||Date.now()+SESSION_TTL};localStorage.setItem(SESSION_KEY,JSON.stringify(session));sessionStorage.removeItem(SESSION_KEY);}
 async function request(path,{method='GET',body,token,headers={}}={}){if(!configured()){const error=new Error('O cadastro está sendo preparado. Tente novamente em breve.');error.code='not_configured';throw error;}const c=getConfig();const response=await fetch(`${c.supabaseUrl}${path}`,{method,headers:{apikey:c.supabasePublicKey,'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`} : {}),...headers},...(body!==undefined?{body:JSON.stringify(body)}:{}),...(typeof AbortSignal.timeout==='function'?{signal:AbortSignal.timeout(20000)}:{})});const result=await response.json().catch(()=>null);if(!response.ok){const error=new Error(result?.msg||result?.message||result?.error_description||result?.error||'Não foi possível concluir a operação.');error.status=response.status;error.code=result?.error_code||result?.code;if(token&&(error.status===401||error.code==='28000')){forgetSession();window.dispatchEvent?.(new Event('alva:session-expired'));}throw error;}return result;}
 export function normalizeEmail(email){const value=String(email||'').trim().toLowerCase();if(value.length>254||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))throw new Error('Informe um e-mail válido.');return value;}
 export function validatePassword(password){const value=String(password||'');if(value.length<10||!/[a-z]/.test(value)||!/[A-Z]/.test(value)||!/[0-9]/.test(value))throw new Error('Use ao menos 10 caracteres, com letras maiúsculas, minúsculas e um número.');if(new TextEncoder().encode(value).length>72)throw new Error('Use uma senha de até 72 bytes.');return value;}
