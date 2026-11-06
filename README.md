@@ -6,7 +6,7 @@ Versão 1.4. Controle financeiro pessoal e de microempresas, com interface glass
 
 O cadastro pede nome, e-mail e senha e abre uma conta vazia imediatamente. A confirmação por e-mail está desativada por escolha do proprietário. Não há cobrança ou upgrade nesta configuração. O endereço informado **não tem propriedade verificada**: o identificador dos dados é o UUID autenticado, nunca o texto do e-mail.
 
-O Supabase exige ao menos 12 caracteres, maiúscula, minúscula e número. O cliente também valida o limite de 72 bytes do bcrypt. Senhas são transmitidas via HTTPS ao Supabase Auth; o aplicativo não as armazena em logs, HTML ou armazenamento do navegador. Os hashes são gerenciados pelo Supabase.
+O Supabase exige ao menos 10 caracteres, maiúscula, minúscula e número. O cliente também valida o limite de 72 bytes do bcrypt. Senhas são transmitidas via HTTPS ao Supabase Auth; o aplicativo não as armazena em logs, HTML ou armazenamento do navegador. Os hashes são gerenciados pelo Supabase.
 
 A recuperação de senha por e-mail ainda depende de um serviço SMTP. Não há botão que simule envio ou prometa uma recuperação indisponível. Antes de oferecer o serviço a um público amplo, configure esse recurso; instruções em `ATIVAR-EMAIL.md`.
 
