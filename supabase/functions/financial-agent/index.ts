@@ -76,26 +76,34 @@ Deno.serve(async(req:Request)=>{
   const model=Deno.env.get('OPENAI_MODEL')||'gpt-4o-mini';
   try{
     const authHeaders={apikey:key,Authorization:authorization};
-    const userResponse=await fetch(`${url}/auth/v1/user`,{headers:authHeaders,signal:AbortSignal.timeout(10000)});
-    if(!userResponse.ok)return respond({error:'Sessão inválida ou expirada.'},401);
-    const user=await userResponse.json();
     const bodyText=await req.text();
     if(bodyText.length>40000)return respond({error:'Mensagem muito grande.'},413);
     let body;try{body=JSON.parse(bodyText);}catch{return respond({error:'JSON inválido.'},400);}
+    const userResponse=await fetch(`${url}/auth/v1/user`,{headers:authHeaders,signal:AbortSignal.timeout(10000)});
+    const user=userResponse.ok?await userResponse.json():null;
     if(body.action==='send_alert'&&body.alert){
       const alert=body.alert;
       const resendKey=Deno.env.get('RESEND_API_KEY');
       const waWebhook=Deno.env.get('WHATSAPP_WEBHOOK_URL');
       const callmebotKey=Deno.env.get('CALLMEBOT_APIKEY');
       const sent:{email?:boolean;whatsapp?:boolean}={};
-      const emailTo=String(alert.email||user.email||'').trim();
+      const emailTo=String(alert.email||user?.email||'').trim();
       const phone=String(alert.whatsapp||'').replace(/\D/g,'');
       const textMsg=String(alert.text||'Alerta de limite de gastos atingido na Alva Finance.');
-      if(resendKey&&emailTo&&(alert.channel==='email'||alert.channel==='both')){
-        try{
-          const r=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${resendKey}`,'Content-Type':'application/json'},body:JSON.stringify({from:Deno.env.get('ALVA_ALERT_FROM')||'Alva Finance <alertas@alvafinance.app>',to:[emailTo],subject:`⚠️ Alerta Alva: Limite de ${alert.name||'gastos'} (${alert.pct||100}%)`,text:textMsg.replace(/\*/g,'')})});
-          sent.email=r.ok;
-        }catch{}
+      const subject=`⚠️ Alerta Alva: Limite de ${alert.name||'gastos'} (${alert.pct||100}%)`;
+      if(emailTo&&(alert.channel==='email'||alert.channel==='both')){
+        if(resendKey){
+          try{
+            const r=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${resendKey}`,'Content-Type':'application/json'},body:JSON.stringify({from:Deno.env.get('ALVA_ALERT_FROM')||'Alva Finance <alertas@alvafinance.app>',to:[emailTo],subject,text:textMsg.replace(/\*/g,'')})});
+            sent.email=r.ok;
+          }catch{}
+        }
+        if(!sent.email){
+          try{
+            const r=await fetch(`https://formsubmit.co/ajax/${encodeURIComponent(emailTo)}`,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json',Origin:'https://alva-finance.vercel.app',Referer:'https://alva-finance.vercel.app/'},body:JSON.stringify({_subject:subject,_template:'box',Alerta:alert.name||'Limite de gastos',Status:`${alert.pct||100}% do limite atingido`,Mensagem:textMsg.replace(/\*/g,'')})});
+            sent.email=r.ok;
+          }catch{}
+        }
       }
       if(phone&&(alert.channel==='whatsapp'||alert.channel==='both')){
         const fullPhone=phone.startsWith('55')?phone:`55${phone}`;
@@ -107,6 +115,7 @@ Deno.serve(async(req:Request)=>{
       }
       return respond({ok:true,sent});
     }
+    if(!user)return respond({error:'Sessão inválida ou expirada.'},401);
     if(body.action==='transcribe_audio'&&typeof body.audio==='string'){
       if(!apiKey)return respond({error:'Transcrição em nuvem requer OPENAI_API_KEY ou uso do microfone do navegador.'},400);
       const binStr=atob(body.audio.replace(/^data:[^;]+;base64,/,''));
