@@ -4,10 +4,53 @@ export const escapeHTML=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<'
 export const dateISO=(d=new Date())=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 export function cents(value){const n=Number(String(value).trim().replace(/\s|R\$/g,'').replace(/\.(?=\d{3}(?:\D|$))/g,'').replace(',','.'));if(!Number.isFinite(n)||n<=0||n>1e10)throw new Error('Informe um valor válido, maior que zero.');return Math.round(n*100);}
 export const numeric=c=>((c||0)/100).toFixed(2);
-export function emptyData(name=''){return {profile:{name,monthly_budget:0,opening_balance:0},transactions:[],goals:[],debts:[],investments:[]};}
+export function emptyData(name=''){return {profile:{name,monthly_budget:0,opening_balance:0,alert_whatsapp:'',alert_email:'',alert_channel:'both'},transactions:[],goals:[],debts:[],investments:[],spending_limits:[]};}
+export function debtMetrics(d){
+ const installments=Math.max(1,Math.round(Number(d?.installments)||1));
+ const fallbackTotal=Math.max(0,Number(d?.total)||Number(d?.balance)||0);
+ const installmentAmount=Number(d?.installment_amount)>0?Math.round(Number(d.installment_amount)):Math.round(fallbackTotal/installments);
+ const total=Number(d?.installment_amount)>0?installments*installmentAmount:fallbackTotal;
+ const principal=Number(d?.principal)>0?Math.round(Number(d.principal)):total;
+ const balance=Math.max(0,Math.min(total,Number(d?.balance)??total));
+ const paid=Math.max(0,total-balance);
+ const interest=Math.max(0,total-principal);
+ const interestPct=principal>0?(interest/principal)*100:0;
+ const monthlyInterestPct=installments>0?interestPct/installments:0;
+ return {installments,installmentAmount,total,principal,balance,paid,interest,interestPct,monthlyInterestPct};
+}
+export function evaluateSpendingLimits(state,month){
+ const limits=Array.isArray(state?.spending_limits)?state.spending_limits:[];
+ const expenses=(state?.transactions||[]).filter(t=>t.type==='expense'&&String(t.date||'').startsWith(month));
+ return limits.map(lim=>{
+  const targetName=String(lim.name||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+  const targetCat=String(lim.category||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+  const isCatName=categories.some(c=>c.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')===targetName);
+  const matched=expenses.filter(t=>{
+   const tName=String(t.name||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+   const tCat=String(t.category||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+   if(isCatName||lim.scope==='category')return tCat===targetName||tCat===targetCat||tName.includes(targetName);
+   if(lim.scope==='keyword')return Boolean(targetName&&tName.includes(targetName));
+   if(targetName&&tName.includes(targetName))return true;
+   if(targetCat&&targetCat!=='todas'&&tCat===targetCat&&targetName===targetCat)return true;
+   return false;
+  });
+  const spent=matched.reduce((a,t)=>a+(Number(t.amount)||0),0);
+  const limitVal=Math.max(1,Number(lim.limit)||1);
+  const pct=Math.round((spent/limitVal)*100);
+  const remaining=Math.max(0,limitVal-spent);
+  const exceeded=spent>=limitVal;
+  const warning=!exceeded&&pct>=80;
+  return {...lim,spent,limit:limitVal,pct,remaining,exceeded,warning,status:exceeded?'exceeded':warning?'warning':'ok',count:matched.length};
+ });
+}
+export function formatLimitAlertMessage(item,profile={},month=''){
+ const statusText=item.exceeded?`🚨 *LIMITE ATINGIDO NA ALVA!*`:`⚠️ *ALERTA DE GASTO NA ALVA (${item.pct}%)*`;
+ const diff=item.spent-item.limit;
+ return `${statusText}\n\nOlá${profile?.name?', '+profile.name.split(' ')[0]:''}! Seu limite definido para *${item.name}* ${item.exceeded?'foi atingido':'está próximo do teto'} no mês (${month}).\n\n• Gasto acumulado: *${money(item.spent)}*\n• Limite estipulado: *${money(item.limit)}* (${item.pct}%)\n• ${item.exceeded?(diff>0?`Valor acima do limite: *${money(diff)}*`:`Você chegou a 100% do limite estipulado.`):`Ainda restam: *${money(item.remaining)}*`}\n\nAcesse seu painel Alva para acompanhar seus lançamentos.`;
+}
 export function sampleData(){
  const state=emptyData('Camila Oliveira');const month=dateISO().slice(0,7);const day=n=>`${month}-${String(Math.min(n,new Date().getDate())).padStart(2,'0')}`;
- state.profile={name:'Camila Oliveira',monthly_budget:350000,opening_balance:184000};
+ state.profile={name:'Camila Oliveira',monthly_budget:350000,opening_balance:184000,alert_whatsapp:'11999999999',alert_email:'camila@exemplo.com',alert_channel:'both'};
  state.transactions=[
  {name:'Salário',category:'Salário',amount:650000,type:'income',date:day(1)},
  {name:'Aluguel',category:'Moradia',amount:120000,type:'expense',date:day(2)},
@@ -20,10 +63,18 @@ export function sampleData(){
  {name:'Almoço',category:'Alimentação',amount:6100,type:'expense',date:day(5)}
  ].map(x=>({...x,id:crypto.randomUUID()}));
  state.goals=[{id:crypto.randomUUID(),name:'Reserva de emergência',target:1500000,saved:600000,emoji:'🌱',deadline:`${new Date().getFullYear()+1}-06-30`},{id:crypto.randomUUID(),name:'Minha próxima viagem',target:500000,saved:225000,emoji:'✈️',deadline:`${new Date().getFullYear()+1}-03-15`}];
- state.debts=[{id:crypto.randomUUID(),name:'Cartão de crédito',total:480000,balance:240000,installments:6,due:`${month}-10`},{id:crypto.randomUUID(),name:'Notebook',total:360000,balance:180000,installments:10,due:`${month}-15`}];
- state.investments=[{id:crypto.randomUUID(),name:'Reserva em renda fixa',amount:600000,kind:'Renda fixa'},{id:crypto.randomUUID(),name:'Carteira de longo prazo',amount:220000,kind:'Fundos'}];return state;
+ state.debts=[
+  {id:crypto.randomUUID(),name:'Cartão de crédito',principal:420000,total:480000,balance:240000,installments:6,installment_amount:80000,due:`${month}-10`},
+  {id:crypto.randomUUID(),name:'Notebook',principal:310000,total:360000,balance:180000,installments:10,installment_amount:36000,due:`${month}-15`}
+ ];
+ state.investments=[{id:crypto.randomUUID(),name:'Reserva em renda fixa',amount:600000,kind:'Renda fixa'},{id:crypto.randomUUID(),name:'Carteira de longo prazo',amount:220000,kind:'Fundos'}];
+ state.spending_limits=[
+  {id:crypto.randomUUID(),name:'Alimentação',category:'Alimentação',scope:'category',limit:60000,channel:'both'},
+  {id:crypto.randomUUID(),name:'Uber',category:'Transporte',scope:'keyword',limit:15000,channel:'whatsapp'}
+ ];
+ return state;
 }
-export function totals(state,month){const list=state.transactions.filter(t=>t.date.startsWith(month));const sum=(items,type)=>items.filter(t=>t.type===type).reduce((a,t)=>a+t.amount,0);return {income:sum(list,'income'),expense:sum(list,'expense'),balance:state.profile.opening_balance+sum(state.transactions,'income')-sum(state.transactions,'expense'),saved:state.goals.reduce((a,g)=>a+g.saved,0),debt:state.debts.reduce((a,d)=>a+d.balance,0),invested:state.investments.reduce((a,i)=>a+i.amount,0),list};}
+export function totals(state,month){const list=state.transactions.filter(t=>t.date.startsWith(month));const sum=(items,type)=>items.filter(t=>t.type===type).reduce((a,t)=>a+t.amount,0);const debtInterest=state.debts.reduce((a,d)=>a+debtMetrics(d).interest,0);return {income:sum(list,'income'),expense:sum(list,'expense'),balance:state.profile.opening_balance+sum(state.transactions,'income')-sum(state.transactions,'expense'),saved:state.goals.reduce((a,g)=>a+g.saved,0),debt:state.debts.reduce((a,d)=>a+d.balance,0),debtInterest,invested:state.investments.reduce((a,i)=>a+i.amount,0),list};}
 export function projection(initial,monthly,annual,years){const rate=Math.pow(1+annual/100,1/12)-1;const months=Math.round(years*12);let total=initial;const points=[total];for(let n=1;n<=months;n++){total=total*(1+rate)+monthly;if(n%12===0)points.push(total);}return {total:Math.round(total),contributed:initial+monthly*months,points};}
 export function budgetBreakdown(state,month){const list=state.transactions.filter(t=>t.type==='expense'&&t.date.startsWith(month));const sums={};for(const t of list)sums[t.category]=(sums[t.category]||0)+t.amount;return Object.entries(sums).sort((a,b)=>b[1]-a[1]);}
 export function localAnswer(question,state,month){
@@ -43,10 +94,16 @@ export function localAnswer(question,state,month){
   const net=t.income-t.expense;
   return `Resumo do seu mês (${month}):\n• Entradas no mês: ${money(t.income)}\n• Saídas no mês: ${money(t.expense)}\n• Balanço do mês: ${net>=0?'+':'−'}${money(Math.abs(net))}\n• Saldo disponível total: ${money(t.balance)}\n\n${top?`A categoria com maior saída é ${top[0]} (${money(top[1])}).`:'Nenhuma saída registrada neste mês.'}`;
  }
- if(/divida|dívida|quitar|pagar|cartão|parcela|devo/.test(q)){
-  if(!activeDebts.length)return 'Você não tem dívidas em aberto no momento! 🌱 Se quiser cadastrar alguma, diga por exemplo: "Adicionar dívida Cartão 1200 em 6x" ou anexe sua planilha.';
-  const lines=activeDebts.slice(0,5).map(d=>{const c=Math.max(1,Number(d.installments)||1);return `• ${d.name}: ${money(d.balance)} em aberto (${c}x de ${money(Math.round(d.total/c))}, venc. ${new Date(d.due+'T12:00:00').toLocaleDateString('pt-BR')})`;}).join('\n');
-  return `Você tem ${activeDebts.length} ${activeDebts.length===1?'dívida em aberto':'dívidas em aberto'}, somando ${money(t.debt)}:\n\n${lines}\n\nVocê pode registrar pagamentos ou excluir uma dívida na aba Minhas dívidas (ou me pedir: "Excluir dívida ${activeDebts[0].name}").`;
+ if(/limite|teto|alerta|aviso/.test(q)){
+  const lims=evaluateSpendingLimits(state,month);
+  if(!lims.length)return 'Você ainda não definiu limites de gastos. Pode criar no painel "Limites de gastos" na Visão geral ou me dizer por aqui: "Limitar gasto com Uber em 200".';
+  const lines=lims.map(l=>`• ${l.name}: ${money(l.spent)} de ${money(l.limit)} (${l.pct}% · ${l.exceeded?'🚨 Limite atingido!':l.warning?'⚠️ Perto do limite':'Dentro do limite'})`).join('\n');
+  return `Aqui estão seus limites de gastos para este mês (${month}):\n\n${lines}\n\nQuando um gasto atinge o limite, a Alva avisa você no app, WhatsApp e/ou e-mail configurados.`;
+ }
+ if(/divida|dívida|quitar|pagar|cartão|parcela|devo|juro/.test(q)){
+  if(!activeDebts.length)return 'Você não tem dívidas em aberto no momento! 🌱 Se quiser cadastrar alguma, diga por exemplo: "Adicionar dívida Cartão 1200 em 6x de 220" ou anexe sua planilha.';
+  const lines=activeDebts.slice(0,5).map(d=>{const m=debtMetrics(d);return `• ${d.name}: ${money(d.balance)} em aberto (${m.installments}x de ${money(m.installmentAmount)}${m.interest>0?` · juros: ${money(m.interest)} [+${m.interestPct.toFixed(1).replace('.',',')}%]`:' · sem juros'}, venc. ${new Date(d.due+'T12:00:00').toLocaleDateString('pt-BR')})`;}).join('\n');
+  return `Você tem ${activeDebts.length} ${activeDebts.length===1?'dívida em aberto':'dívidas em aberto'}, somando ${money(t.debt)}${t.debtInterest>0?` (com ${money(t.debtInterest)} de juros embutidos no total)`:''}:\n\n${lines}\n\nVocê pode registrar pagamentos ou excluir uma dívida na aba Minhas dívidas.`;
  }
  if(/meta|juntar|economizar|guardar|reserva|viagem|objetivo|sonho/.test(q)){
   if(!state.goals.length)return 'Você ainda não cadastrou objetivos. Diga por exemplo "Criar meta Reserva de emergência de 10000" ou clique em Meus objetivos.';
@@ -423,12 +480,27 @@ export function tryChatCommand(question,state){
  const amtToken=amtMatches.at(-1)[1];
  const amount=Math.abs(parseFlexAmount(amtToken));if(!amount)return null;
  const cleanLabel=raw=>raw.replace(amtMatches.at(-1)[0],'').replace(/\b(?:em\s*)?\d{1,3}\s*(?:x|parcelas?|vezes)\b/gi,'').replace(/\b(?:adicion(?:e|ar)|cri(?:e|ar)|registr(?:e|ar)|lan[cç](?:e|ar)|cadastr(?:e|ar)|coloc(?:a|ar)|tenho|quero|uma?|novo|nova|d[ií]vida|meta|objetivo|investimento|investi|apliquei|gastei|paguei|comprei|despesa|sa[ií]da|gasto|recebi|ganhei|entrada|receita|sal[aá]rio|reais|real|R\$|no|na|de|do|da|com|em|por|para|valor|hoje)\b/gi,' ').replace(/[:;,-]+/g,' ').replace(/\s+/g,' ').trim();
+ if(/\b(limit(?:ar|e)|teto\s+de\s+gasto)\b/i.test(q)){
+  const name=(cleanLabel(q).replace(/\b(?:limit(?:ar|e)|teto|gasto|gastos|mensal|ate|até|para)\b/gi,' ').replace(/\s+/g,' ').trim()||'Gasto específico').slice(0,80);
+  const label=name.charAt(0).toUpperCase()+name.slice(1);
+  const matchedCat=categories.find(c=>normStr(c)===normStr(label))||inferCategory(label,'expense');
+  const isCat=categories.some(c=>normStr(c)===normStr(label));
+  return {kind:'spending-limit',item:{id:crypto.randomUUID(),name:label,category:matchedCat,scope:isCat?'category':'keyword',limit:amount,channel:state?.profile?.alert_channel||'both'},reply:`Pronto! Defini um limite mensal de ${money(amount)} para "${label}". Quando seus gastos chegarem perto ou atingirem esse valor, vou avisar você!`};
+ }
  if(/\b(d[ií]vida|empr[eé]stimo|financiamento|parcelado|parcelas?)\b/i.test(q)&&!/\b(paguei\s+a\s+parcela|quitei)\b/i.test(q)){
   const instMatch=q.match(/\b(\d{1,3})\s*(?:x|parcelas?|vezes)\b/i);
   const inst=instMatch?Math.max(1,Math.min(360,Number(instMatch[1]))):1;
+  const allAmts=amtMatches.map(m=>Math.abs(parseFlexAmount(m[1]))).filter(Boolean);
+  let principal=amount,instAmt=Math.round(amount/inst),total=amount;
+  if(allAmts.length>=2&&inst>1){
+   const sorted=[...allAmts].sort((a,b)=>b-a);
+   principal=sorted[0];instAmt=sorted[1];total=inst*instAmt;
+  }
+  const interest=Math.max(0,total-principal);
+  const pct=principal>0?((interest/principal)*100).toFixed(1).replace('.',','):'0';
   const name=(cleanLabel(q)||'Cartão / Dívida').slice(0,80);
   const label=name.charAt(0).toUpperCase()+name.slice(1);
-  return {kind:'debt',item:{id:crypto.randomUUID(),name:label,total:amount,balance:amount,installments:inst,due:dateISO()},reply:`Pronto! Cadastrei a dívida "${label}" de ${money(amount)} em ${inst}x (${money(Math.round(amount/inst))} por parcela) em Minhas dívidas.`};
+  return {kind:'debt',item:{id:crypto.randomUUID(),name:label,principal,total,balance:total,installments:inst,installment_amount:instAmt,due:dateISO()},reply:`Pronto! Cadastrei a dívida "${label}" em ${inst}x de ${money(instAmt)} (total: ${money(total)}${interest>0?` · juros calculados: ${money(interest)} [+${pct}%]`:' · sem juros'}) em Minhas dívidas.`};
  }
  if(/\b(meta|objetivo|sonho|juntar\s+para)\b/i.test(q)){
   const name=(cleanLabel(q)||'Minha meta').slice(0,80);

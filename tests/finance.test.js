@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {emptyData,cents,totals,projection,budgetBreakdown,escapeHTML,parseDocumentContent,applyImportedData,tryChatCommand} from '../dist/finance.js';
+import {emptyData,cents,totals,projection,budgetBreakdown,escapeHTML,parseDocumentContent,applyImportedData,tryChatCommand,debtMetrics,evaluateSpendingLimits,formatLimitAlertMessage} from '../dist/finance.js';
 test('interpreta valores brasileiros e rejeita valores inválidos',()=>{assert.equal(cents('1.234,56'),123456);assert.equal(cents('1234.56'),123456);assert.equal(cents('12,90'),1290);for(const value of ['abc','-1','0','Infinity'])assert.throws(()=>cents(value));});
 test('saldo é global e resumo mensal respeita o mês',()=>{const s=emptyData('Teste');s.profile.opening_balance=10000;s.transactions=[{type:'income',amount:5000,date:'2026-10-01'},{type:'expense',amount:3000,date:'2026-11-02',category:'Alimentação'},{type:'income',amount:9000,date:'2026-11-03'}];const t=totals(s,'2026-11');assert.equal(t.balance,21000);assert.equal(t.income,9000);assert.equal(t.expense,3000);assert.deepEqual(budgetBreakdown(s,'2026-11'),[['Alimentação',3000]]);});
 test('simulação com taxa zero preserva capital mais aportes',()=>{const p=projection(100000,30000,0,5);assert.equal(p.total,1900000);assert.equal(p.contributed,1900000);assert.equal(p.points.length,6);});
@@ -52,4 +52,26 @@ test('importa planilha com linha de título, cabeçalhos compostos e sem cabeça
  assert.equal(parsedNoHeader.transactions[0].name,'Uber');
  assert.equal(parsedNoHeader.transactions[0].amount,3250);
  assert.equal(parsedNoHeader.transactions[1].type,'income');
+});
+test('calcula juros automaticamente pelas parcelas e valor da parcela',()=>{
+ const m=debtMetrics({name:'Notebook',principal:200000,installments:10,installment_amount:24500,balance:245000});
+ assert.equal(m.total,245000);
+ assert.equal(m.interest,45000);
+ assert.equal(Math.round(m.interestPct*10),225);
+});
+test('monitora limite de gasto específico e gera alerta de WhatsApp/E-mail',()=>{
+ const s=emptyData('Lipe');
+ s.spending_limits=[{id:crypto.randomUUID(),name:'Uber',category:'Transporte',scope:'keyword',limit:10000,channel:'both'}];
+ s.transactions=[
+  {id:crypto.randomUUID(),name:'Uber Centro',category:'Transporte',type:'expense',amount:6000,date:'2026-11-02'},
+  {id:crypto.randomUUID(),name:'Uber Aeroporto',category:'Transporte',type:'expense',amount:5500,date:'2026-11-05'}
+ ];
+ const evaluated=evaluateSpendingLimits(s,'2026-11');
+ assert.equal(evaluated.length,1);
+ assert.equal(evaluated[0].spent,11500);
+ assert.equal(evaluated[0].exceeded,true);
+ assert.equal(evaluated[0].pct,115);
+ const msg=formatLimitAlertMessage(evaluated[0],s.profile,'2026-11');
+ assert.ok(msg.includes('LIMITE ATINGIDO'));
+ assert.ok(msg.includes('Uber'));
 });

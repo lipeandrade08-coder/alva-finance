@@ -82,6 +82,31 @@ Deno.serve(async(req:Request)=>{
     const bodyText=await req.text();
     if(bodyText.length>40000)return respond({error:'Mensagem muito grande.'},413);
     let body;try{body=JSON.parse(bodyText);}catch{return respond({error:'JSON inválido.'},400);}
+    if(body.action==='send_alert'&&body.alert){
+      const alert=body.alert;
+      const resendKey=Deno.env.get('RESEND_API_KEY');
+      const waWebhook=Deno.env.get('WHATSAPP_WEBHOOK_URL');
+      const callmebotKey=Deno.env.get('CALLMEBOT_APIKEY');
+      const sent:{email?:boolean;whatsapp?:boolean}={};
+      const emailTo=String(alert.email||user.email||'').trim();
+      const phone=String(alert.whatsapp||'').replace(/\D/g,'');
+      const textMsg=String(alert.text||'Alerta de limite de gastos atingido na Alva Finance.');
+      if(resendKey&&emailTo&&(alert.channel==='email'||alert.channel==='both')){
+        try{
+          const r=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${resendKey}`,'Content-Type':'application/json'},body:JSON.stringify({from:Deno.env.get('ALVA_ALERT_FROM')||'Alva Finance <alertas@alvafinance.app>',to:[emailTo],subject:`⚠️ Alerta Alva: Limite de ${alert.name||'gastos'} (${alert.pct||100}%)`,text:textMsg.replace(/\*/g,'')})});
+          sent.email=r.ok;
+        }catch{}
+      }
+      if(phone&&(alert.channel==='whatsapp'||alert.channel==='both')){
+        const fullPhone=phone.startsWith('55')?phone:`55${phone}`;
+        if(waWebhook){
+          try{const r=await fetch(waWebhook,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:fullPhone,message:textMsg,alert})});sent.whatsapp=r.ok;}catch{}
+        }else if(callmebotKey){
+          try{const r=await fetch(`https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(fullPhone)}&text=${encodeURIComponent(textMsg)}&apikey=${encodeURIComponent(callmebotKey)}`);sent.whatsapp=r.ok;}catch{}
+        }
+      }
+      return respond({ok:true,sent});
+    }
     if(typeof body.message!=='string'||!body.message.trim()||body.message.length>2000)return respond({error:'Envie uma mensagem de até 2.000 caracteres.'},400);
     const dataResponse=await fetch(`${url}/rest/v1/finance_data?user_id=eq.${user.id}&select=data`,{headers:authHeaders,signal:AbortSignal.timeout(10000)});
     if(!dataResponse.ok)return respond({error:'Não foi possível ler os dados financeiros.'},502);
