@@ -128,7 +128,36 @@ export function sampleData(){
  ];
  return state;
 }
-export function totals(state,month){const list=state.transactions.filter(t=>t.date.startsWith(month));const sum=(items,type)=>items.filter(t=>t.type===type).reduce((a,t)=>a+t.amount,0);const debtInterest=state.debts.reduce((a,d)=>a+debtMetrics(d).interest,0);return {income:sum(list,'income'),expense:sum(list,'expense'),balance:state.profile.opening_balance+sum(state.transactions,'income')-sum(state.transactions,'expense'),saved:state.goals.reduce((a,g)=>a+g.saved,0),debt:state.debts.reduce((a,d)=>a+d.balance,0),debtInterest,invested:state.investments.reduce((a,i)=>a+i.amount,0),list};}
+export function totals(state, month) {
+ const list = [];
+ const monthStart = `${month}-01`;
+ let openingBalance = Number(state.profile.opening_balance) || 0;
+ let balance = openingBalance;
+ let income = 0;
+ let expense = 0;
+ for (const transaction of state.transactions) {
+  const { date, type, amount } = transaction;
+  const delta = type === 'income' ? amount : type === 'expense' ? -amount : 0;
+  balance += delta;
+  if (date && date < monthStart) openingBalance += delta;
+  if (!date.startsWith(month)) continue;
+  list.push(transaction);
+  if (type === 'income') income += amount;
+  if (type === 'expense') expense += amount;
+ }
+ return {
+  income,
+  expense,
+  balance,
+  openingBalance,
+  closingBalance: openingBalance + income - expense,
+  saved: state.goals.reduce((sum, goal) => sum + goal.saved, 0),
+  debt: state.debts.reduce((sum, debt) => sum + debt.balance, 0),
+  debtInterest: state.debts.reduce((sum, debt) => sum + debtMetrics(debt).interest, 0),
+  invested: state.investments.reduce((sum, investment) => sum + investment.amount, 0),
+  list
+ };
+}
 export function projection(initial,monthly,annual,years){const rate=Math.pow(1+annual/100,1/12)-1;const months=Math.round(years*12);let total=initial;const points=[total];for(let n=1;n<=months;n++){total=total*(1+rate)+monthly;if(n%12===0)points.push(total);}return {total:Math.round(total),contributed:initial+monthly*months,points};}
 function expenseBreakdown(transactions,inPeriod){
  const sums=new Map();
