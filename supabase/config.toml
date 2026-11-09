@@ -403,3 +403,7 @@ s3_secret_key = "env(S3_SECRET_KEY)"
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":80,\"commaStyle\":\"trailing\"}"
 
 # Aplique as secoes em smtp-templates.toml somente depois de configurar SMTP.
+
+[functions.notification-center]
+# A função valida a sessão ativa ou a chave do worker antes de acessar a fila.
+verify_jwt = false

@@ -110,7 +110,7 @@ function verifiedAlertDestinations(user: Record<string, any>, profile: Record<st
   };
 }
 
-async function dispatchAlert(url: string, authHeaders: Record<string, string>, user: Record<string, any>, state: Record<string, any>, limitId: string) {
+async function dispatchAlert(url: string, authHeaders: Record<string, string>, user: Record<string, any>, state: Record<string, any>, limitId: string, whatsappOnly = false) {
   const sent = { email: false, whatsapp: false };
   const limit: AlertLimit | undefined = Array.isArray(state.spending_limits)
     ? state.spending_limits.find((item: AlertLimit) => item?.id === limitId)
@@ -126,7 +126,7 @@ async function dispatchAlert(url: string, authHeaders: Record<string, string>, u
   const resendKey = Deno.env.get('RESEND_API_KEY');
   const sender = Deno.env.get('ALVA_ALERT_FROM');
   const webhook = Deno.env.get('WHATSAPP_WEBHOOK_URL');
-  const emailEnabled = (channel === 'email' || channel === 'both') && destination.email && resendKey && sender;
+  const emailEnabled = !whatsappOnly && (channel === 'email' || channel === 'both') && destination.email && resendKey && sender;
   const whatsappEnabled = (channel === 'whatsapp' || channel === 'both') && destination.whatsapp && webhook?.startsWith('https://');
   if (!emailEnabled && !whatsappEnabled) return { status: 200, body: { sent, reason: 'no_verified_destination' } };
 
@@ -209,7 +209,7 @@ Deno.serve(async(req:Request)=>{
     const rows=await dataResponse.json();const state=rows[0]?.data;
     if(!state)return respond({error:'Conta financeira não encontrada.'},404);
     if(alertRequest){
-      const result=await dispatchAlert(url,authHeaders,user,state,body.limit_id);
+      const result=await dispatchAlert(url,authHeaders,user,state,body.limit_id,body.whatsapp_only === true);
       return respond(result.body,result.status);
     }
     if(!apiKey){

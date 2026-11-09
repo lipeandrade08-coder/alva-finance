@@ -1,0 +1,28 @@
+.notice-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 18px; }
+.notice-layout h2 { margin: 0 0 8px; }
+.notice-history { grid-column: 1 / -1; }
+.notice-focus { background: radial-gradient(circle at 95% 0%, #d4efda 0, transparent 44%), var(--glass-bg, #fff); }
+.notice-kicker { display: inline-flex; align-items: center; gap: 7px; color: #34704e; font-size: 10px; letter-spacing: .1em; font-weight: 800; margin-bottom: 12px; }
+.notice-kicker .icon { width: 16px; height: 16px; }
+.notice-hint, .notice-channel p { color: #476452; line-height: 1.6; font-size: 13px; }
+.notice-list { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; }
+.notice-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 11px; align-items: center; background: #f8fbf8; border: 1px solid #dce9df; border-radius: 13px; padding: 12px; }
+.notice-item.unread { background: #edf8ef; border-color: #bddfc5; }
+.notice-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: #def0e1; color: #2e6c48; }
+.notice-icon .icon { width: 18px; height: 18px; }
+.notice-copy { min-width: 0; overflow-wrap: anywhere; }
+.notice-copy strong { font-size: 13px; }
+.notice-copy p, .notice-empty p { font-size: 12px; color: #486251; margin: 5px 0; line-height: 1.55; }
+.notice-pill { display: inline-block; width: fit-content; border-radius: 99px; padding: 4px 8px; font-size: 10px; background: #e5eee6; color: #385643; }
+.notice-pill.active { background: #daf0dd; color: #28623d; }
+.notice-empty { padding: 17px 0 0; }
+.notice-empty .button { margin-top: 9px; }
+.notice-heading { display: flex; align-items: start; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.notice-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.notice-channel, .notice-code-form { display: grid; gap: 10px; margin-top: 10px; justify-items: start; }
+.notice-channel strong { overflow-wrap: anywhere; }
+.notice-code-form .input { max-width: 12rem; }
+.notice-feedback:empty { display: none; }
+.notice-feedback.error { color: #912f31; }
+@media (max-width: 740px) { .notice-layout { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 440px) { .notice-item { grid-template-columns: auto minmax(0, 1fr); } .notice-item > .button { grid-column: 2; justify-self: start; min-height: 44px; } }

@@ -36,10 +36,10 @@ export function evaluateSpendingLimits(state,month){
   });
   const spent=matched.reduce((a,t)=>a+(Number(t.amount)||0),0);
   const limitVal=Math.max(1,Number(lim.limit)||1);
-  const pct=Math.round((spent/limitVal)*100);
   const remaining=Math.max(0,limitVal-spent);
   const exceeded=spent>=limitVal;
-  const warning=!exceeded&&pct>=80;
+  const warning=!exceeded&&spent*5>=limitVal*4;
+  const pct=Math.min(exceeded?Infinity:warning?99:79,Math.round(spent*100/limitVal));
   return {...lim,spent,limit:limitVal,pct,remaining,exceeded,warning,status:exceeded?'exceeded':warning?'warning':'ok',count:matched.length};
  });
 }

@@ -93,3 +93,10 @@ edgeTest('limite ainda não atingido e mudança para destinatário não verifica
   const second = await requestAlert(t, { appMetadata: { alva_verified_alerts: verified }, currentState: changed });
   assert.equal(second.calls.some(isExternal), false);
 });
+
+edgeTest('modo WhatsApp da Central não usa o envio legado de e-mail', async t => {
+  const { response, calls } = await requestAlert(t, { appMetadata: { alva_verified_alerts: verified }, payload: { whatsapp_only: true } });
+  assert.deepEqual((await response.json()).sent, { email: false, whatsapp: true });
+  assert.equal(calls.filter(isExternal).length, 1);
+  assert.equal(calls.some(call => call.url === 'https://api.resend.com/emails'), false);
+});

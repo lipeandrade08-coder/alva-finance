@@ -35,10 +35,23 @@ export async function logout(){try{if(session)await request('/auth/v1/logout?sco
 export async function loadAccount(){const token=await accessToken();const user=await request('/auth/v1/user',{token});await request('/rest/v1/rpc/ensure_alva_account',{method:'POST',token,body:{}});const [profiles,rows]=await Promise.all([request(`/rest/v1/profiles?id=eq.${user.id}&select=*`,{token}),request(`/rest/v1/finance_data?user_id=eq.${user.id}&select=data,revision`,{token})]);if(!rows?.[0])throw new Error('Não foi possível carregar seu espaço financeiro. Tente novamente.');return {user,profile:profiles?.[0],data:rows[0].data,revision:rows[0].revision};}
 export async function saveAccount(data,revision){return await request('/rest/v1/rpc/save_finances',{method:'POST',token:await accessToken(),body:{new_data:data,expected_revision:revision}});}
 export async function askAgent(message,history){return await request('/functions/v1/financial-agent',{method:'POST',token:await accessToken(),body:{message,history}});}
-export async function sendAlertNotification(limitId){
+export async function sendAlertNotification(limitId, {whatsappOnly=false}={}){
  if(!session)return null;
  try{
-  return await request('/functions/v1/financial-agent',{method:'POST',token:await accessToken(),body:{action:'send_alert',limit_id:limitId}});
+  return await request('/functions/v1/financial-agent',{method:'POST',token:await accessToken(),body:{action:'send_alert',limit_id:limitId,whatsapp_only:whatsappOnly}});
  }catch{return null;}
 }
 export async function transcribeAudio(audioBase64,mimeType='audio/webm',fileName='audio.webm'){try{if(!session)return null;return await request('/functions/v1/financial-agent',{method:'POST',token:await accessToken(),body:{action:'transcribe_audio',audio:audioBase64,mimeType,fileName}});}catch{return null;}}
+
+const noticeFields='id,limit_id,month,level,label,spent_cents,limit_cents,created_at,read_at,email_state';
+export async function listNotices(){
+ return await request(`/rest/v1/alva_notices?select=${noticeFields}&order=created_at.desc,id.desc&limit=50`,{token:await accessToken()});
+}
+export async function readNotices(ids){
+ const unique=[...new Set(ids)].filter(id=>/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)).slice(0,50);
+ if(!unique.length)return;
+ await request(`/rest/v1/alva_notices?id=in.(${unique.join(',')})&read_at=is.null`,{method:'PATCH',token:await accessToken(),body:{read_at:new Date().toISOString()}});
+}
+export async function noticeChannel(action,details={}){
+ return await request('/functions/v1/notification-center',{method:'POST',token:await accessToken(),body:{...details,action}});
+}

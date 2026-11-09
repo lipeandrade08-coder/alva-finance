@@ -41,13 +41,14 @@ Esses controles foram testados, mas não constituem garantia de segurança absol
 
 ## Banco
 
-`supabase/schema.sql` instala o esquema completo em um projeto novo, uma vez. As migrações em `supabase/migrations/` preservam dados e atualizam instalações anteriores. Não execute o schema completo para atualizar um banco existente. A migração mais recente introduz `private` e sessões ativas.
+`supabase/schema.sql` instala o esquema completo em um projeto novo, uma vez. As migrações em `supabase/migrations/` preservam dados e atualizam instalações anteriores. Não execute o schema completo para atualizar um banco existente. O esquema usa sessões ativas para isolar os dados por usuário.
 
 | Estrutura | Conteúdo |
 | --- | --- |
 | `auth.users` / `auth.sessions` | Identidades e sessões gerenciadas pelo Supabase |
 | `public.profiles` | Nome do próprio usuário |
 | `public.finance_data` | Estado financeiro pessoal e empresarial, revisão e atualização |
+| `public.alva_notices` | Histórico de avisos privado por conta |
 | `public.agent_usage` | Controle interno de uso, sem acesso direto do cliente |
 | `private.*` | Validação de sessão, validação de documentos e operações atômicas |
 
@@ -78,3 +79,5 @@ O e-mail requer `RESEND_API_KEY` e `ALVA_ALERT_FROM` na função. O WhatsApp req
 - [Sessões e revogação](https://supabase.com/docs/guides/auth/sessions)
 - [RLS](https://supabase.com/docs/guides/database/postgres/row-level-security)
 - [SMTP](https://supabase.com/docs/guides/auth/auth-smtp)
+
+A [Central de avisos](CENTRAL-DE-AVISOS.md) reúne vencimentos, limites e histórico. Veja o guia para publicar a migração e habilitar o envio por e-mail.
