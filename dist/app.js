@@ -49,11 +49,14 @@ const voice=createVoiceCapture({
 const planningUI=createPlanningUI({getData:()=>data,modal,openWithdrawal:amount=>businessUI.openWithdrawal(amount)});
 const importUI=createImportUI({
  getData:()=>data,dialog:$('#modal'),modal,commit,
- onImported:batch=>{
+ onImported:result=>{
+  const batches=result.batches??[result];
+  const destination=view==='business'?'business':'personal';
+  const batch=batches.find(item=>item.destination===destination)??batches[0];
   const rows=batch.destination==='business'?data.business.records:data.transactions;
   const months=rows.filter(record=>record.import_batch_id===batch.id).map(record=>record.date.slice(0,7)).sort();
   if(months.length&&!months.includes(month))month=months.at(-1);
-  navigate(batch.destination==='business'?'business':'transactions');
+  navigate(batch.destination==='business'?'business':batches.length>1?'dashboard':'transactions');
  }
 });
 const noticeUI=createNoticeUI({
@@ -76,7 +79,8 @@ const noticeUI=createNoticeUI({
 function toast(msg){$('#toast').textContent=msg;$('#toast').classList.add('show');setTimeout(()=>$('#toast').classList.remove('show'),4200);}
 function ledgerMonthOptions(){
  const rows=view==='business'?(data.business?.records??[]):data.transactions;
- const months=new Set([month,...rows.map(row=>String(row.date??'').slice(0,7)).filter(key=>/^\d{4}-(?:0[1-9]|1[0-2])$/.test(key))]);
+ const dates=rows.flatMap(row=>view==='business'?[row.date,row.paid_date]:[row.date]);
+ const months=new Set([month,...dates.map(date=>String(date??'').slice(0,7)).filter(key=>/^\d{4}-(?:0[1-9]|1[0-2])$/.test(key))]);
  return [...months].sort().reverse().map(key=>`<option value="${key}" ${key===month?'selected':''}>${e(monthLabel(key))}</option>`).join('');
 }
 function shell(){

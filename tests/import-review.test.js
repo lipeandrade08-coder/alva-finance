@@ -178,14 +178,36 @@ test('Excel separa receitas e despesas por mês e destino, ignorando relatórios
   assert.equal(personal.periods.get('undated').count, 1);
   assert.equal(business.periods.has('2026-12'), false);
 
-  await applyReviewedImport(state, [document]);
-  await applyReviewedImport(state, [document], { destination: 'business' });
+  const imported = await applyReviewedImport(state, [document], { destination: 'mixed' });
+  assert.deepEqual(imported.batches.map(batch => [batch.destination, batch.count]), [['personal', 5], ['business', 4]]);
   assert.equal(state.transactions.length, 4);
   assert.equal(state.investments.length, 1);
   assert.equal(state.goals.length, 0);
   assert.equal(state.business.records.length, 4);
   assert.equal(totals(state, '2026-11').expense, 7280);
+  assert.equal(totals(state, '2026-11').closingBalance, 333269);
   assert.equal(businessTotals(state.business, '2026-11').received, 70000);
-  assert.equal(planImport(state, [document]).selected.length, 0);
-  assert.equal(planImport(state, [document], { destination: 'business' }).selected.length, 0);
+  assert.equal(businessTotals(state.business, '2026-08').closingBalance, 84260);
+  assert.equal(businessTotals(state.business, '2026-11').closingBalance, 141261);
+  assert.equal(planImport(state, [document], { destination: 'mixed' }).selected.length, 0);
+
+  await undoReviewedImport(state, imported.batches[1].id);
+  const retry = await applyReviewedImport(state, [document], { destination: 'mixed' });
+  assert.deepEqual(retry.batches.map(batch => [batch.destination, batch.count]), [['business', 4]]);
+  assert.equal(state.transactions.length, 4);
+});
+
+test('coluna Destino separa despesas da mesma aba e mantém saldo informado fora das movimentações', async () => {
+  const document = await readPastedImport([
+    'Data;Descrição;Tipo;Destino;Valor;Saldo',
+    '05/08/2026;Mercado;Saída;PF;23,50;5000,00',
+    '06/08/2026;Fornecedor;Saída;Pessoa jurídica;123,45;6000,00',
+    '06/08/2026;Linha sem destino;Saída;;99,00;5000,00',
+    '07/08/2026;Saldo final;Entrada;Pessoal;9900,00;9900,00'
+  ].join('\n'));
+  const state = emptyData();
+  assert.equal(planImport(state, [document], { destination: 'mixed' }).unassignedCount, 1);
+  await applyReviewedImport(state, [document], { destination: 'mixed' });
+  assert.deepEqual(state.transactions.map(row => row.amount), [2350]);
+  assert.deepEqual(state.business.records.map(row => row.amount), [12345]);
 });

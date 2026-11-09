@@ -8,7 +8,39 @@ export function sampleBusiness(){const b=emptyBusiness(),m=dateISO().slice(0,7),
 {name:'Assinatura de software',category:'Ferramentas',type:'expense',amount:14900,date:day(4),due_date:`${m}-15`,status:'pending',paid_date:null,counterparty:''}
 ].map(r=>({...r,id:crypto.randomUUID()}));return b;}
 export function ensureBusiness(data,demo=false){if(!data.business)data.business=demo?sampleBusiness():emptyBusiness();return data.business;}
-export function businessTotals(b,month){const sum=list=>list.reduce((s,r)=>s+r.amount,0),paid=b.records.filter(r=>r.status==='paid'),inMonth=paid.filter(r=>(r.paid_date||r.date).startsWith(month));const income=inMonth.filter(r=>r.type==='income'),expense=inMonth.filter(r=>r.type==='expense');const sales=b.records.filter(r=>r.type==='income'&&!r.linked&&r.counts_as_sale!==false);const receivable=b.records.filter(r=>r.type==='income'&&r.status==='pending'),payable=b.records.filter(r=>r.type==='expense'&&r.status==='pending');const outstandingTaxes=b.taxes.filter(t=>!t.paid);return {balance:b.profile.opening_balance+sum(paid.filter(r=>r.type==='income'))-sum(paid.filter(r=>r.type==='expense')),revenue:sum(sales.filter(r=>r.date.startsWith(month))),annualRevenue:sum(sales.filter(r=>r.date.startsWith(month.slice(0,4)))),received:sum(income),spent:sum(expense),cashResult:sum(income)-sum(expense),receivable:sum(receivable),payable:sum(payable)+sum(outstandingTaxes),withdrawals:sum(inMonth.filter(r=>r.linked_type==='withdrawal')),receivableCount:receivable.length,payableCount:payable.length+outstandingTaxes.length};}
+export function businessTotals(b, month) {
+ const sum = list => list.reduce((total, record) => total + record.amount, 0);
+ const initialBalance = Number(b.profile.opening_balance) || 0;
+ const monthStart = month + '-01';
+ let balance = initialBalance;
+ let openingBalance = initialBalance;
+ let received = 0;
+ let spent = 0;
+ let withdrawals = 0;
+ for (const record of b.records) {
+  if (record.status !== 'paid') continue;
+  const paidDate = record.paid_date || record.date;
+  const delta = record.type === 'income' ? record.amount : -record.amount;
+  balance += delta;
+  if (paidDate && paidDate < monthStart) openingBalance += delta;
+  if (!paidDate?.startsWith(month)) continue;
+  if (record.type === 'income') received += record.amount;
+  if (record.type === 'expense') spent += record.amount;
+  if (record.linked_type === 'withdrawal') withdrawals += record.amount;
+ }
+ const sales = b.records.filter(record => record.type === 'income' && !record.linked && record.counts_as_sale !== false);
+ const receivable = b.records.filter(record => record.type === 'income' && record.status === 'pending');
+ const payable = b.records.filter(record => record.type === 'expense' && record.status === 'pending');
+ const outstandingTaxes = b.taxes.filter(tax => !tax.paid);
+ return {
+  balance, closingBalance: openingBalance + received - spent,
+  revenue: sum(sales.filter(record => record.date.startsWith(month))),
+  annualRevenue: sum(sales.filter(record => record.date.startsWith(month.slice(0, 4)))),
+  received, spent, cashResult: received - spent,
+  receivable: sum(receivable), payable: sum(payable) + sum(outstandingTaxes),
+  withdrawals, receivableCount: receivable.length, payableCount: payable.length + outstandingTaxes.length
+ };
+}
 export function addBusinessRecord(state,record){const b=ensureBusiness(state);if(!record.name?.trim()||!Number.isSafeInteger(record.amount)||record.amount<=0)throw new Error('Informe uma descrição e um valor válido.');if(!['income','expense'].includes(record.type)||!['paid','pending'].includes(record.status))throw new Error('Tipo ou situação inválidos.');b.records.push({...record,id:crypto.randomUUID(),name:record.name.trim(),paid_date:record.status==='paid'?record.paid_date||record.date:null});}
 export function settleBusinessRecord(state,id,paidDate){const record=ensureBusiness(state).records.find(r=>r.id===id);if(!record)throw new Error('Lançamento não encontrado.');if(record.status==='paid')throw new Error('Este lançamento já foi baixado.');record.status='paid';record.paid_date=paidDate;}
 export function addBusinessTax(state,tax){const b=ensureBusiness(state);if(b.taxes.some(t=>t.name.toLowerCase()===tax.name.toLowerCase()&&t.competence===tax.competence))throw new Error('Já existe um tributo com esse nome nesta competência.');if(!Number.isSafeInteger(tax.amount)||tax.amount<=0)throw new Error('Informe o valor do documento.');b.taxes.push({...tax,id:crypto.randomUUID(),paid:false,paid_date:null});}

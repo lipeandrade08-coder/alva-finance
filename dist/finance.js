@@ -341,17 +341,22 @@ function typedColumnAmount(raw){
 const ledgerFamily = label => normStr(label).match(/^(.+?)\s+[-–—]\s+(receitas|despesas)$/);
 const personalSheet = label => /\b(pessoal|pessoais)\b/.test(label);
 const unsettledStatus = /^(?:pendente|em aberto|em atraso|atrasad[oa]|previst[oa]|agendad[oa]|cancelad[oa]|a pagar|a receber|nao pag[oa]|nao recebid[oa])$/;
+function importDestination(label, businessFamilies) {
+ const personal=personalSheet(label)||/\b(pf|pessoa fisica)\b/.test(label);
+ const company=businessFamilies.has(ledgerFamily(label)?.[1]||label)||
+  /\b(empresas?|empresarial|empresariais|negocio|mei|pj|pessoa juridica)\b/.test(label);
+ if(personal===company)return '';
+ return personal?'personal':'business';
+}
 
 function parseTableRows(rows,result,sheetHint='', {year,date1904=false,sheet='',businessFamilies=new Set()}={}){
  if(!rows?.length)return;
  let colMap=null;
  const hintNorm=normStr(sheetHint).replace(/\.(?:csv|tsv|txt)$/,'');
- const family=ledgerFamily(hintNorm)?.[1];
  const incomeSheet=/\b(receitas?|entradas?)\b/.test(hintNorm);
  const expenseSheet=/\b(despesas?|saidas?)\b/.test(hintNorm);
  const direction=incomeSheet===expenseSheet?'':incomeSheet?'income':'expense';
- const companySheet=businessFamilies.has(family)||/\b(empresa|empresarial|negocio|mei|pj)\b/.test(hintNorm);
- const destination=personalSheet(hintNorm)?'personal':companySheet?'business':'';
+ const destination=importDestination(hintNorm,businessFamilies);
  const source={...(sheet?{import_sheet:sheet}:{}),...(destination?{import_destination:destination}:{})};
  const dates=/\b(data|dt|dia|competencia|emissao|date)\b/;
  const summarySheet=/(?:^|\s[-–—]\s)(?:visao geral|resumo|painel|dashboard|consolidado|clientes ativos)\b/.test(hintNorm);
@@ -390,6 +395,7 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false,sheet='',
     balance:headers.findIndex((h,i)=>i!==descIdx&&/\b(saldo|aberto|restante|devedor)\b/.test(h)),
     saved:headers.findIndex((h,i)=>i!==descIdx&&/\b(guardado|acumulado|ja pago|pago)\b/.test(h)),
     type:headers.findIndex((h,i)=>i!==descIdx&&/\b(tipo|natureza|fluxo|operacao|type)\b/.test(h)),
+    destination:headers.findIndex((h,i)=>i!==descIdx&&/^(?:destino|escopo|conta|carteira|empresa|tipo de conta|centro de custo)$/.test(h)),
     status:headers.findIndex(h=>/^(?:status|situacao)\b/.test(h)),
     category:headers.findIndex(h=>/\b(categoria|classificacao|grupo|setor|area|category)\b/.test(h)),
     date:headers.findIndex((h,i)=>i!==descIdx&&dates.test(h)&&!/\b(vencimento|prazo)\b/.test(h)),
@@ -405,6 +411,8 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false,sheet='',
    const value=idx=>idx>=0&&idx<cells.length?cells[idx]:'';
    const name=get(colMap.name).slice(0,100);
    if(!name||summaryRow(name))continue;
+   const rowDestination=importDestination(normStr(get(colMap.destination)),businessFamilies);
+   const rowSource=rowDestination?{...source,import_destination:rowDestination}:source;
    const typeCell=normStr(get(colMap.type)),catCell=get(colMap.category);
    const kind=/\b(divida|emprestimo|financiamento)\b/.test(typeCell)||(colMap.section==='debt'&&colMap.installments>=0)?'debt':/\b(meta|objetivo|reserva)\b/.test(typeCell)||colMap.section==='goal'?'goal':/\b(investimento|aplicacao|renda fixa|fundo|acoes)\b/.test(typeCell)||colMap.section==='investment'?'investment':'transaction';
    const rawDate=get(colMap.date>=0?colMap.date:colMap.due);
@@ -416,7 +424,7 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false,sheet='',
     if(bal>0||tot>0){
      const inst=Math.max(1,Math.min(360,Math.round(Number(get(colMap.installments))||1)));
      const dueRaw=get(colMap.due)||rawDate,due=readDate(dueRaw);
-     result.debts.push({id:crypto.randomUUID(),name:name.slice(0,80),total:Math.max(tot,bal),balance:bal,installments:inst,due,...withSourceDate(dueRaw,due),...source});
+     result.debts.push({id:crypto.randomUUID(),name:name.slice(0,80),total:Math.max(tot,bal),balance:bal,installments:inst,due,...withSourceDate(dueRaw,due),...rowSource});
     }
     continue;
    }
@@ -424,12 +432,12 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false,sheet='',
     const target=Math.abs(typedColumnAmount(value(colMap.total)||value(colMap.amount)));
     const saved=Math.abs(typedColumnAmount(value(colMap.saved)));
     const deadlineRaw=get(colMap.due)||rawDate,deadline=readDate(deadlineRaw);
-    if(target>0)result.goals.push({id:crypto.randomUUID(),name:name.slice(0,80),target,saved:Math.min(target,saved),emoji:'🌱',deadline,...withSourceDate(deadlineRaw,deadline),...source});
+    if(target>0)result.goals.push({id:crypto.randomUUID(),name:name.slice(0,80),target,saved:Math.min(target,saved),emoji:'🌱',deadline,...withSourceDate(deadlineRaw,deadline),...rowSource});
     continue;
    }
    if(kind==='investment'){
     const amt=Math.abs(typedColumnAmount(value(colMap.amount)||value(colMap.total)||value(colMap.balance)));
-    if(amt>0)result.investments.push({id:crypto.randomUUID(),name:name.slice(0,80),amount:amt,kind:catCell||'Renda fixa',...source});
+    if(amt>0)result.investments.push({id:crypto.randomUUID(),name:name.slice(0,80),amount:amt,kind:catCell||'Renda fixa',...rowSource});
     continue;
    }
    const income=Math.abs(typedColumnAmount(value(colMap.incomeCol)));
@@ -454,7 +462,7 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false,sheet='',
     type=signed>0&&(received||incomeLabel)?'income':'expense';
    }
    const matchedCat=categories.find(c=>normStr(c)===normStr(catCell))||inferCategory(name,type);
-   result.transactions.push({id:crypto.randomUUID(),name,amount,type,category:matchedCat,date:dt,...withSourceDate(rawDate,dt),...source,...(conflict?{import_issue:'Entrada e saída preenchidas na mesma linha'}:{})});
+   result.transactions.push({id:crypto.randomUUID(),name,amount,type,category:matchedCat,date:dt,...withSourceDate(rawDate,dt),...rowSource,...(conflict?{import_issue:'Entrada e saída preenchidas na mesma linha'}:{})});
   }else{
    // Row without detected header yet: inspect cells structurally
    let dt='',rawDate='',signed=0,catMatch='',texts=[];

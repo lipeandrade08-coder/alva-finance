@@ -3,6 +3,7 @@ import { ensureBusiness } from './business.js';
 import { validImportDate } from './import-dates.js';
 
 const collections = ['transactions', 'debts', 'goals', 'investments'];
+const destinations = ['personal', 'business'];
 const maxFileBytes = 5 * 1024 * 1024;
 const maxAmount = 10_000_000_000;
 const normalize = value => String(value ?? '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().trim().replace(/\s+/g, ' ');
@@ -89,7 +90,31 @@ function increment(map, key) {
   return count;
 }
 
-export function planImport(state, documents, { destination = 'personal', account = '', include = new Set(), dates = new Map() } = {}) {
+export function planImport(state, documents, options = {}) {
+  if (options.destination !== 'mixed') return planDestination(state, documents, options);
+  let unassignedCount = 0;
+  const scopedDocuments = documents.map(document => ({
+    ...document,
+    rows: document.rows.filter(row => {
+      if (destinations.includes(row.destination)) return true;
+      unassignedCount++;
+      return false;
+    })
+  }));
+  const plans = destinations.map(destination => planDestination(state, scopedDocuments, { ...options, destination }));
+  const counts = Object.fromEntries(Object.keys(plans[0].counts).map(status => [
+    status, plans.reduce((sum, plan) => sum + plan.counts[status], 0)
+  ]));
+  return {
+    destination: 'mixed',
+    plans,
+    counts,
+    unassignedCount,
+    ...summarizeRows(plans.flatMap(plan => plan.rows))
+  };
+}
+
+function planDestination(state, documents, { destination = 'personal', account = '', include = new Set(), dates = new Map() } = {}) {
   const scope = normalize(account);
   const existing = existingRows(state, destination);
   const knownKeys = new Set(existing.map(({ record }) => record.import_source).filter(Boolean));
@@ -133,13 +158,16 @@ export function planImport(state, documents, { destination = 'personal', account
         if (row.bankKey) bankKeys.add(row.bankKey);
       }
       counts[status]++;
-      rows.push({ ...row, fileName: document.name, status, period, dateField, needsDate, selected: status === 'ready' || (status === 'possible' && include.has(row.key)) });
+      rows.push({ ...row, destination, fileName: document.name, status, period, dateField, needsDate, selected: status === 'ready' || (status === 'possible' && include.has(row.key)) });
     }
     for (const [signature, count] of occurrences) {
       previousCounts.set(signature, Math.max(count, previousCounts.get(signature) ?? 0));
     }
   }
-  const selected = rows.filter(row => row.selected);
+  return { destination, account: String(account).trim().slice(0, 60), counts, otherDestinationCount, ...summarizeRows(rows) };
+}
+
+function summarizeRows(rows) {
   const periods = new Map();
   for (const row of rows) {
     const totals = periods.get(row.period) ?? { count: 0, selected: 0, income: 0, expense: 0 };
@@ -150,7 +178,7 @@ export function planImport(state, documents, { destination = 'personal', account
     }
     periods.set(row.period, totals);
   }
-  return { destination, account: String(account).trim().slice(0, 60), rows, counts, selected, periods, otherDestinationCount };
+  return { rows, selected: rows.filter(row => row.selected), periods };
 }
 
 function sortKeys(value) {
@@ -171,6 +199,15 @@ function importedRows(state, batch) {
 export async function applyReviewedImport(state, documents, options) {
   const plan = planImport(state, documents, options);
   if (!plan.selected.length) throw new Error('Nenhum registro novo para importar.');
+  if (plan.destination !== 'mixed') return saveImportBatch(state, plan);
+  const batches = [];
+  for (const scopedPlan of plan.plans) {
+    if (scopedPlan.selected.length) batches.push(await saveImportBatch(state, scopedPlan));
+  }
+  return { destination: 'mixed', batches };
+}
+
+async function saveImportBatch(state, plan) {
   const batch = {
     id: crypto.randomUUID(),
     destination: plan.destination,
