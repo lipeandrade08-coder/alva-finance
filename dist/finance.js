@@ -48,6 +48,58 @@ export function formatLimitAlertMessage(item,profile={},month=''){
  const diff=item.spent-item.limit;
  return `${statusText}\n\nOlá${profile?.name?', '+profile.name.split(' ')[0]:''}! Seu limite definido para *${item.name}* ${item.exceeded?'foi atingido':'está próximo do teto'} no mês (${month}).\n\n• Gasto acumulado: *${money(item.spent)}*\n• Limite estipulado: *${money(item.limit)}* (${item.pct}%)\n• ${item.exceeded?(diff>0?`Valor acima do limite: *${money(diff)}*`:`Você chegou a 100% do limite estipulado.`):`Ainda restam: *${money(item.remaining)}*`}\n\nAcesse seu painel Alva para acompanhar seus lançamentos.`;
 }
+export function formatGoalCoachingPlan(goal,state={},month=dateISO().slice(0,7)){
+ const target=Math.max(1,Number(goal?.target)||0);
+ const saved=Math.max(0,Number(goal?.saved)||0);
+ const remaining=Math.max(0,target-saved);
+ const safeState={
+  profile:state?.profile||{},
+  transactions:Array.isArray(state?.transactions)?state.transactions:[],
+  goals:Array.isArray(state?.goals)?state.goals:[],
+  debts:Array.isArray(state?.debts)?state.debts:[],
+  investments:Array.isArray(state?.investments)?state.investments:[],
+  spending_limits:Array.isArray(state?.spending_limits)?state.spending_limits:[]
+ };
+ const t=totals(safeState,month);
+ const byCat=budgetBreakdown(safeState,month);
+ const top=byCat[0];
+ let diffMonths=12,deadlineLabel='';
+ if(goal?.deadline){
+  const due=new Date(String(goal.deadline).includes('T')?goal.deadline:`${goal.deadline}T12:00:00`);
+  if(!isNaN(due.getTime())){
+   const now=new Date();
+   diffMonths=Math.max(1,Math.round((due-now)/(1000*60*60*24*30.44)));
+   deadlineLabel=due.toLocaleDateString('pt-BR');
+  }
+ }
+ const monthlyNeeded=Math.ceil(remaining/diffMonths);
+ const weeklyNeeded=Math.ceil(monthlyNeeded/4);
+ const lines=[
+  `🎯 **Plano Prático para o seu Objetivo: ${goal?.name||'Meu Sonho'}**`,
+  `Alvo: **${money(target)}** · Já guardado: **${money(saved)}** · Falta juntar: **${money(remaining)}**${deadlineLabel?` · Prazo: ${deadlineLabel} (~${diffMonths} meses)`:''}`,
+  '',
+  'Para transformar esse sonho em um objetivo **funcional e eficaz**, montei 4 perguntas práticas:',
+  '',
+  `1️⃣ **Qual ritmo cabe no seu mês? (Parcela do Sonho)**`,
+  deadlineLabel
+   ? `• Para alcançar até ${deadlineLabel}, você precisará guardar cerca de **${money(monthlyNeeded)}/mês** (ou **${money(weeklyNeeded)}/semana**). Esse valor cabe no seu orçamento atual ou prefere ajustar o prazo?`
+   : `• Ritmo acelerado (6 meses): guardar **${money(Math.ceil(remaining/6))}/mês**\n• Ritmo equilibrado (12 meses): guardar **${money(Math.ceil(remaining/12))}/mês**\n• Ritmo suave (24 meses): guardar **${money(Math.ceil(remaining/24))}/mês**\nQual desses ritmos faz mais sentido para o seu momento?`,
+  '',
+  `2️⃣ **De onde virá o dinheiro? (Corte inteligente sem aperto)**`,
+  top
+   ? `• Sua maior saída no mês é com **${top[0]} (${money(top[1])})**. Se você economizar apenas 15% nessa categoria, já libera **${money(Math.round(top[1]*0.15))}/mês** direto para ${goal?.name||'a sua meta'}! Quer criar um limite de gasto nela?`
+   : `• Olhe seus pequenos gastos do dia a dia (delivery, transporte por aplicativo, assinaturas paradas). Onde você sente que é mais fácil economizar R$ 50 a R$ 150 por mês?`,
+  '',
+  `3️⃣ **Quando separar? (Regra do Pague-se Primeiro)**`,
+  `• Guarde a quantia da sua meta **no mesmo dia em que sua renda cair na conta**, antes de começar a gastar. Quem se paga primeiro tem 3x mais chance de concluir o objetivo!`,
+  '',
+  `4️⃣ **Quer dar o primeiro passo hoje?**`,
+  `• Guardar qualquer quantia agora (mesmo R$ 20, R$ 50 ou R$ 100) ativa o compromisso no seu cérebro e faz sua barra de progresso andar na hora!`,
+  '',
+  `💡 *Você pode me responder por aqui no chat, me dizer quanto quer guardar ou pedir para simular esse valor rendendo juros a seu favor!*`
+ ];
+ return lines.join('\n');
+}
 export function sampleData(){
  const state=emptyData('Camila Oliveira');const month=dateISO().slice(0,7);const day=n=>`${month}-${String(Math.min(n,new Date().getDate())).padStart(2,'0')}`;
  state.profile={name:'Camila Oliveira',monthly_budget:350000,opening_balance:184000,alert_whatsapp:'11999999999',alert_email:'camila@exemplo.com',alert_channel:'both'};
@@ -108,8 +160,9 @@ export function localAnswer(question,state,month){
  if(/meta|juntar|economizar|guardar|reserva|viagem|objetivo|sonho/.test(q)){
   if(!state.goals.length)return 'Você ainda não cadastrou objetivos. Diga por exemplo "Criar meta Reserva de emergência de 10000" ou clique em Meus objetivos.';
   const lines=state.goals.map(g=>`• ${g.emoji||'🌱'} ${g.name}: ${money(g.saved)} de ${money(g.target)} (${Math.min(100,Math.round(g.saved/Math.max(1,g.target)*100))}%)`).join('\n');
-  const nextGoal=activeGoals[0];
-  return `Seus objetivos somam ${money(t.saved)} guardados:\n\n${lines}${nextGoal?`\n\nPara concluir "${nextGoal.name}", faltam ${money(nextGoal.target-nextGoal.saved)} (ou ${money(Math.ceil((nextGoal.target-nextGoal.saved)/12))}/mês em 1 ano).`:''}`;
+  const nextGoal=activeGoals[0]||state.goals[0];
+  const coaching=nextGoal?`\n\n${formatGoalCoachingPlan(nextGoal,state,month)}`:'';
+  return `Seus objetivos somam ${money(t.saved)} guardados:\n\n${lines}${coaching}`;
  }
  if(/invest|rende|rendimento|aplicar|patrim[oô]nio/.test(q)){
   const lines=state.investments.map(i=>`• ${i.name} (${i.kind}): ${money(i.amount)}`).join('\n');
@@ -509,7 +562,9 @@ function parseSingleChatClause(rawClause,state){
  if(/\b(meta|objetivo|sonho|juntar\s+para)\b/i.test(q)){
   const name=(cleanLabel(q)||'Minha meta').slice(0,80);
   const label=name.charAt(0).toUpperCase()+name.slice(1);
-  return {kind:'goal',item:{id:crypto.randomUUID(),name:label,target:amount,saved:0,emoji:'🌱',deadline:''},reply:`Pronto! Criei o objetivo "${label}" com meta de ${money(amount)} em Meus objetivos.`};
+  const item={id:crypto.randomUUID(),name:label,target:amount,saved:0,emoji:'🌱',deadline:''};
+  const coaching=formatGoalCoachingPlan(item,state);
+  return {kind:'goal',item,reply:`Pronto! Criei o objetivo "${label}" com meta de ${money(amount)} em Meus objetivos. 🌱\n\n${coaching}`};
  }
  if(/\b(investi|apliquei|investimento|aplicar\s+em|aporte\s+em)\b/i.test(q)){
   const name=(cleanLabel(q)||'Aporte').slice(0,80);
@@ -537,6 +592,12 @@ export function tryChatCommand(question,state){
   const target=normStr(delDebtMatch[1]);
   const found=state.debts.find(d=>normStr(d.name).includes(target)||target.includes(normStr(d.name)));
   if(found)return {kind:'delete-debt',id:found.id,reply:`Pronto! Excluí a dívida "${found.name}" (${money(found.balance)}) do seu painel.`};
+ }
+ const delGoalMatch=q.match(/^(?:exclu(?:a|ir)|apag(?:ue|ar)|remov(?:a|er)|delet(?:e|ar))\s+(?:o\s+|a\s+)?(?:objetivo|meta|sonho)\s+(.+)$/i);
+ if(delGoalMatch&&state?.goals?.length){
+  const target=normStr(delGoalMatch[1]);
+  const found=state.goals.find(g=>normStr(g.name).includes(target)||target.includes(normStr(g.name)));
+  if(found)return {kind:'delete-goal',id:found.id,reply:`Pronto! Excluí o objetivo "${found.name}" (${money(found.target)}) do seu painel.`};
  }
  const delTxMatch=q.match(/^(?:exclu(?:a|ir)|apag(?:ue|ar)|remov(?:a|er)|delet(?:e|ar))\s+(?:o\s+)?(?:lan[cç]amento|gasto|despesa|receita)\s+(.+)$/i);
  if(delTxMatch&&state?.transactions?.length){

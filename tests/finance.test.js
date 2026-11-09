@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {emptyData,cents,totals,projection,budgetBreakdown,escapeHTML,parseDocumentContent,applyImportedData,tryChatCommand,debtMetrics,evaluateSpendingLimits,formatLimitAlertMessage} from '../dist/finance.js';
+import {emptyData,cents,totals,projection,budgetBreakdown,escapeHTML,parseDocumentContent,applyImportedData,tryChatCommand,debtMetrics,evaluateSpendingLimits,formatLimitAlertMessage,formatGoalCoachingPlan} from '../dist/finance.js';
 test('interpreta valores brasileiros e rejeita valores inválidos',()=>{assert.equal(cents('1.234,56'),123456);assert.equal(cents('1234.56'),123456);assert.equal(cents('12,90'),1290);for(const value of ['abc','-1','0','Infinity'])assert.throws(()=>cents(value));});
 test('saldo é global e resumo mensal respeita o mês',()=>{const s=emptyData('Teste');s.profile.opening_balance=10000;s.transactions=[{type:'income',amount:5000,date:'2026-10-01'},{type:'expense',amount:3000,date:'2026-11-02',category:'Alimentação'},{type:'income',amount:9000,date:'2026-11-03'}];const t=totals(s,'2026-11');assert.equal(t.balance,21000);assert.equal(t.income,9000);assert.equal(t.expense,3000);assert.deepEqual(budgetBreakdown(s,'2026-11'),[['Alimentação',3000]]);});
 test('simulação com taxa zero preserva capital mais aportes',()=>{const p=projection(100000,30000,0,5);assert.equal(p.total,1900000);assert.equal(p.contributed,1900000);assert.equal(p.points.length,6);});
@@ -94,4 +94,18 @@ test('reconhece comandos por áudio com números por extenso, centavos falados e
  assert.equal(multi.items[0].type,'expense');
  assert.equal(multi.items[1].amount,30000);
  assert.equal(multi.items[1].type,'income');
+});
+test('excluir objetivo por comando de chat e montagem de plano de perguntas pela Alva',()=>{
+ const s=emptyData('Teste');
+ s.goals=[{id:'goal-1',name:'Viagem',target:600000,saved:100000,emoji:'✈️'}];
+ const delCmd=tryChatCommand('Excluir objetivo Viagem',s);
+ assert.equal(delCmd.kind,'delete-goal');
+ assert.equal(delCmd.id,'goal-1');
+ assert.ok(delCmd.reply.includes('Viagem'));
+ const plan=formatGoalCoachingPlan(s.goals[0],s,'2026-11');
+ assert.ok(plan.includes('Plano Prático para o seu Objetivo: Viagem'));
+ assert.ok(plan.includes('Qual ritmo cabe no seu mês'));
+ assert.ok(plan.includes('De onde virá o dinheiro'));
+ assert.ok(plan.includes('Pague-se Primeiro'));
+ assert.ok(plan.toLowerCase().includes('primeiro passo'));
 });

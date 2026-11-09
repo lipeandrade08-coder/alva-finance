@@ -47,11 +47,12 @@ function buildSmartAnswer(question:string,state:Record<string,any>):string{
     const count=Math.max(1,Number(d.installments)||1);
     return `Suas dívidas em aberto somam ${money(totalDebt)} (${active.length} registro${active.length>1?'s':''}). O próximo compromisso é ${d.name}, parcelado em ${count}x (${money(Math.round((Number(d.total)||Number(d.balance))/count))} por parcela), com saldo em aberto de ${money(d.balance)}.`;
   }
-  if(/meta|juntar|economizar|guardar|reserva|viagem|objetivo/.test(q)){
-    const g=goals.find((x:any)=>Number(x.saved)<Number(x.target));
+  if(/meta|juntar|economizar|guardar|reserva|viagem|objetivo|sonho/.test(q)){
+    const g=goals.find((x:any)=>Number(x.saved)<Number(x.target))||goals[0];
     if(!g)return `Você tem ${money(totalSaved)} guardados em objetivos. Crie uma nova meta dizendo "Criar meta Reserva de 10000" ou pela aba Meus objetivos.`;
     const rem=Math.max(0,Number(g.target)-Number(g.saved));
-    return `Para o objetivo ${g.name}, você já guardou ${money(g.saved)} de ${money(g.target)}. Faltam ${money(rem)} (cerca de ${money(Math.ceil(rem/12))} por mês em 12 meses).`;
+    const m6=Math.ceil(rem/6), m12=Math.ceil(rem/12);
+    return `🎯 Plano para o objetivo ${g.name} (${money(g.saved)} de ${money(g.target)} guardados · faltam ${money(rem)}):\n\nPerguntas para tornar seu objetivo funcional e eficaz:\n1. Ritmo de economia: para alcançar em 1 ano, você precisa de ${money(m12)}/mês (ou ${money(m6)}/mês em 6 meses). Qual ritmo cabe no seu orçamento?\n2. De onde virá: sua maior saída no mês é ${top?`${top[0]} (${money(top[1])})`:'gastos variáveis'}. Reduzir 15% nela já direciona a sobra direto para a meta.\n3. Pague-se primeiro: guarde assim que sua renda entrar, antes de começar a gastar!\n4. Quer começar guardando qualquer quantia agora pelo chat?`;
   }
   if(/invest|rende|rendimento|aplicar|selic|cdb|tesouro/.test(q)){
     return `Seu patrimônio registrado em investimentos soma ${money(totalInvested)}. Você pode registrar novos aportes pelo chat (ex.: "Investi 500 em Tesouro Selic") ou usar o simulador na aba Investimentos.`;
