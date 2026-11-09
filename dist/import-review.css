@@ -25,7 +25,9 @@
 .import-period { display: flex; flex-wrap: wrap; align-items: end; gap: 9px 18px; }
 .import-period-totals { display: flex; flex-wrap: wrap; gap: 4px 13px; color: #315341; font-size: 12px; }
 .import-period-totals strong { margin-left: 3px; }
-.import-month-heading { padding: 7px 12px; background: #edf4eb; color: #315341; font-size: 11px; font-weight: 750; }
+.import-month-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 7px 12px; background: #edf4eb; color: #315341; font-size: 11px; font-weight: 750; }
+.import-month-heading .import-period-totals { font-size: inherit; }
+.import-source-note { padding-left: 18px; margin: 0; }
 .import-date-editor { font-size: 11px; }
 .import-date-editor summary { cursor: pointer; color: #315341; }
 .import-date-editor input { max-width: 100%; min-width: 0; margin-top: 5px; }

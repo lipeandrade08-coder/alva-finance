@@ -18,14 +18,20 @@ async function prepareDocument(parsed, bytes, name) {
   const rows = [];
   for (const collection of collections) {
     for (const [index, item] of parsed[collection].entries()) {
-      const { ofx_reference: reference, import_date_raw: sourceDate, import_issue: issue, ...record } = item;
+      const { ofx_reference: reference, import_date_raw: sourceDate, import_issue: issue,
+        import_sheet: sheet, import_destination: destination, ...record } = item;
       const bankKey = reference && parsed.ofx_account
         ? await digest(textBytes(JSON.stringify([parsed.ofx_account, reference])))
         : '';
-      rows.push({ collection, record, key: `${source}:${collection}:${index}`, bankKey, sourceDate, issue });
+      rows.push({ collection, record, key: `${source}:${collection}:${index}`, bankKey, sourceDate, issue, sheet, destination });
     }
   }
-  return { name: String(name).slice(0, 100), rows };
+  return {
+    name: String(name).slice(0, 100),
+    rows,
+    ignoredSheets: parsed.import_ignored_sheets ?? [],
+    unsettled: parsed.import_unsettled ?? 0
+  };
 }
 
 export async function readImportFile(file) {
@@ -94,10 +100,15 @@ export function planImport(state, documents, { destination = 'personal', account
     if (!scope || !previousScope || previousScope === scope) increment(previousCounts, matchKey(collection, record));
   }
   const rows = [];
+  let otherDestinationCount = 0;
   const counts = { ready: 0, possible: 0, repeated: 0, invalid: 0, unsupported: 0 };
   for (const document of documents) {
     const occurrences = new Map();
     for (const original of document.rows) {
+      if (original.destination && original.destination !== destination) {
+        otherDestinationCount++;
+        continue;
+      }
       const dateField = dateFields[original.collection];
       const override = dates.get(original.key);
       const corrected = dateField && validImportDate(override);
@@ -139,7 +150,7 @@ export function planImport(state, documents, { destination = 'personal', account
     }
     periods.set(row.period, totals);
   }
-  return { destination, account: String(account).trim().slice(0, 60), rows, counts, selected, periods };
+  return { destination, account: String(account).trim().slice(0, 60), rows, counts, selected, periods, otherDestinationCount };
 }
 
 function sortKeys(value) {

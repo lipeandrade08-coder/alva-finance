@@ -161,3 +161,31 @@ test('mês informado no arquivo não faz data vazia ou ano ambíguo cair no mês
     ['2024-12','income',150000], ['undated','income',25000]
   ]);
 });
+
+test('Excel separa receitas e despesas por mês e destino, ignorando relatórios e previsões', async () => {
+  const bytes = await readFile(new URL('./fixtures/importacao-abas-mistas.xlsx', import.meta.url));
+  const document = await readImportFile(file('controle.xlsx', bytes));
+  assert.deepEqual(document.ignoredSheets, ['Visão Geral', 'Clientes Ativos']);
+  assert.equal(document.unsettled, 2);
+  const state = emptyData();
+  const personal = planImport(state, [document]);
+  const business = planImport(state, [document], { destination: 'business' });
+  const monthly = plan => [...plan.periods].filter(([period]) => /^\d/.test(period))
+    .map(([period, { income, expense }]) => [period, income, expense]);
+  assert.deepEqual(monthly(personal), [['2026-08', 182030, 25025], ['2026-11', 183544, 7280]]);
+  assert.deepEqual(monthly(business), [['2026-08', 90000, 5740], ['2026-11', 70000, 12999]]);
+  assert.equal(personal.otherDestinationCount, 4);
+  assert.equal(personal.periods.get('undated').count, 1);
+  assert.equal(business.periods.has('2026-12'), false);
+
+  await applyReviewedImport(state, [document]);
+  await applyReviewedImport(state, [document], { destination: 'business' });
+  assert.equal(state.transactions.length, 4);
+  assert.equal(state.investments.length, 1);
+  assert.equal(state.goals.length, 0);
+  assert.equal(state.business.records.length, 4);
+  assert.equal(totals(state, '2026-11').expense, 7280);
+  assert.equal(businessTotals(state.business, '2026-11').received, 70000);
+  assert.equal(planImport(state, [document]).selected.length, 0);
+  assert.equal(planImport(state, [document], { destination: 'business' }).selected.length, 0);
+});

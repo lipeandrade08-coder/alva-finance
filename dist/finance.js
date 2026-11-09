@@ -309,10 +309,29 @@ function typedColumnAmount(raw){
  return /^[+-]?\d[\d.,]*$/.test(text)?parseFlexAmount(text):0;
 }
 
-function parseTableRows(rows,result,sheetHint='', {year,date1904=false}={}){
+const ledgerFamily = label => normStr(label).match(/^(.+?)\s+[-–—]\s+(receitas|despesas)$/);
+const personalSheet = label => /\b(pessoal|pessoais)\b/.test(label);
+const unsettledStatus = /^(?:pendente|em aberto|em atraso|atrasad[oa]|previst[oa]|agendad[oa]|cancelad[oa]|a pagar|a receber|nao pag[oa]|nao recebid[oa])$/;
+
+function parseTableRows(rows,result,sheetHint='', {year,date1904=false,sheet='',businessFamilies=new Set()}={}){
  if(!rows?.length)return;
  let colMap=null;
- const hintNorm=normStr(sheetHint);
+ const hintNorm=normStr(sheetHint).replace(/\.(?:csv|tsv|txt)$/,'');
+ const family=ledgerFamily(hintNorm)?.[1];
+ const incomeSheet=/\b(receitas?|entradas?)\b/.test(hintNorm);
+ const expenseSheet=/\b(despesas?|saidas?)\b/.test(hintNorm);
+ const direction=incomeSheet===expenseSheet?'':incomeSheet?'income':'expense';
+ const companySheet=businessFamilies.has(family)||/\b(empresa|empresarial|negocio|mei|pj)\b/.test(hintNorm);
+ const destination=personalSheet(hintNorm)?'personal':companySheet?'business':'';
+ const source={...(sheet?{import_sheet:sheet}:{}),...(destination?{import_destination:destination}:{})};
+ const dates=/\b(data|dt|dia|competencia|emissao|date)\b/;
+ const summarySheet=/(?:^|\s[-–—]\s)(?:visao geral|resumo|painel|dashboard|consolidado|clientes ativos)\b/.test(hintNorm);
+ const recurringList=rows.some(row=>row.some(cell=>/^valor mensal(?:\s+\(r\$\))?$/.test(normStr(cell)))&&row.some(cell=>/^(?:cliente|status)$/.test(normStr(cell))));
+ const dateHeader=/^(?:data|dt|dia|competencia|emissao|date)(?:\s+(?:d[aoe] )?(?:pagamento|recebimento|lancamento|compra|movimento))?$/;
+ if((summarySheet||recurringList)&&!rows.some(row=>row.some(cell=>dateHeader.test(normStr(cell))))){
+  (result.import_ignored_sheets??=[]).push(sheet||sheetHint);
+  return;
+ }
  const sheetPeriod=importPeriod(sheetHint,year);
  let period=sheetPeriod,yearHint=sheetPeriod.year;
  const readDate=value=>parseImportDate(value,{period,date1904,serial:true});
@@ -328,9 +347,9 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false}={}){
   }
   if(nonEmpty.length<2 && !(row.length===1&&isImportDateText(row[0].split(/\s+/)[0])))continue;
   const headers=row.map(normStr);
-  const dates=/\b(data|dt|dia|competencia|emissao|date)\b/;
-  let descIdx=headers.findIndex(h=>/\b(descricao|description|historico|nome|titulo|estabelecimento|detalhe|credor|fornecedor|cliente)\b/.test(h)&&!dates.test(h));
+  let descIdx=headers.findIndex(h=>/\b(descricao|description|historico|nome|titulo|estabelecimento|detalhe|credor|fornecedor|cliente|fonte)\b/.test(h)&&!dates.test(h));
   if(descIdx<0)descIdx=headers.findIndex(h=>/^(lancamento|item|divida|meta|objetivo|investimento|conta|origem|referencia)$/.test(h));
+  if(descIdx<0&&/\binvestimentos?\b/.test(hintNorm))descIdx=headers.findIndex(h=>/^(tipo|ativo|instituicao)$/.test(h));
   const valIdx=headers.findIndex((h,i)=>i!==descIdx&&/\b(valor|quantia|total|saldo|montante|preco|entrada|entradas|receita|receitas|saida|saidas|despesa|despesas|credito|debito|amount|value|meta|alvo|parcela|aplicado|aberto)\b/.test(h));
   if(descIdx>=0&&valIdx>=0&&!row.some(c=>isImportDateText(c))){
    colMap={
@@ -342,6 +361,7 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false}={}){
     balance:headers.findIndex((h,i)=>i!==descIdx&&/\b(saldo|aberto|restante|devedor)\b/.test(h)),
     saved:headers.findIndex((h,i)=>i!==descIdx&&/\b(guardado|acumulado|ja pago|pago)\b/.test(h)),
     type:headers.findIndex((h,i)=>i!==descIdx&&/\b(tipo|natureza|fluxo|operacao|type)\b/.test(h)),
+    status:headers.findIndex(h=>/^(?:status|situacao)\b/.test(h)),
     category:headers.findIndex(h=>/\b(categoria|classificacao|grupo|setor|area|category)\b/.test(h)),
     date:headers.findIndex((h,i)=>i!==descIdx&&dates.test(h)&&!/\b(vencimento|prazo)\b/.test(h)),
     due:headers.findIndex(h=>/\b(vencimento|prazo|ate|limite)\b/.test(h)),
@@ -367,7 +387,7 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false}={}){
     if(bal>0||tot>0){
      const inst=Math.max(1,Math.min(360,Math.round(Number(get(colMap.installments))||1)));
      const dueRaw=get(colMap.due)||rawDate,due=readDate(dueRaw);
-     result.debts.push({id:crypto.randomUUID(),name:name.slice(0,80),total:Math.max(tot,bal),balance:bal,installments:inst,due,...withSourceDate(dueRaw,due)});
+     result.debts.push({id:crypto.randomUUID(),name:name.slice(0,80),total:Math.max(tot,bal),balance:bal,installments:inst,due,...withSourceDate(dueRaw,due),...source});
     }
     continue;
    }
@@ -375,12 +395,12 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false}={}){
     const target=Math.abs(typedColumnAmount(value(colMap.total)||value(colMap.amount)));
     const saved=Math.abs(typedColumnAmount(value(colMap.saved)));
     const deadlineRaw=get(colMap.due)||rawDate,deadline=readDate(deadlineRaw);
-    if(target>0)result.goals.push({id:crypto.randomUUID(),name:name.slice(0,80),target,saved:Math.min(target,saved),emoji:'🌱',deadline,...withSourceDate(deadlineRaw,deadline)});
+    if(target>0)result.goals.push({id:crypto.randomUUID(),name:name.slice(0,80),target,saved:Math.min(target,saved),emoji:'🌱',deadline,...withSourceDate(deadlineRaw,deadline),...source});
     continue;
    }
    if(kind==='investment'){
     const amt=Math.abs(typedColumnAmount(value(colMap.amount)||value(colMap.total)||value(colMap.balance)));
-    if(amt>0)result.investments.push({id:crypto.randomUUID(),name:name.slice(0,80),amount:amt,kind:catCell||'Renda fixa'});
+    if(amt>0)result.investments.push({id:crypto.randomUUID(),name:name.slice(0,80),amount:amt,kind:catCell||'Renda fixa',...source});
     continue;
    }
    const income=Math.abs(typedColumnAmount(value(colMap.incomeCol)));
@@ -389,13 +409,23 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false}={}){
    const conflict=income>0&&expense>0;
    const amount=income||expense||Math.abs(signed);
    if(!amount)continue;
-   let type='expense';
-   if(income&&!expense)type='income';
-   else if(!expense&&/^(?:c|income|credit)$|\b(entrada|receita|credito|ganho|salario|venda)\b/.test(typeCell))type='income';
-   else if(!expense&&!/^(?:d|expense|debit)$|\b(saida|despesa|debito|pagamento|gasto|compra)\b/.test(typeCell)&&signed>0&&
-    (/\b(salario|freela|recebimento|deposito|pix recebido|renda|pro.labore|venda|reembolso|dividendo)\b/.test(normStr(name))||/\b(salario|freelance|receita|entrada)\b/.test(normStr(catCell))))type='income';
+   const status=normStr(get(colMap.status));
+   if(unsettledStatus.test(status)){
+    result.import_unsettled=(result.import_unsettled??0)+1;
+    continue;
+   }
+   let type;
+   if(income||expense)type=income?'income':'expense';
+   else if(/^(?:c|income|credit)$|\b(entrada|receita|credito|ganho|salario|venda)\b/.test(typeCell))type='income';
+   else if(/^(?:d|expense|debit)$|\b(saida|despesa|debito|pagamento|gasto|compra)\b/.test(typeCell))type='expense';
+   else if(direction)type=direction;
+   else{
+    const received=/^(?:recebid[oa]|creditad[oa])$/.test(status);
+    const incomeLabel=/\b(salario|freela|recebimento|deposito|pix recebido|renda|pro.labore|venda|reembolso|dividendo)\b/.test(normStr(name))||/\b(salario|freelance|receita|entrada)\b/.test(normStr(catCell));
+    type=signed>0&&(received||incomeLabel)?'income':'expense';
+   }
    const matchedCat=categories.find(c=>normStr(c)===normStr(catCell))||inferCategory(name,type);
-   result.transactions.push({id:crypto.randomUUID(),name,amount,type,category:matchedCat,date:dt,...withSourceDate(rawDate,dt),...(conflict?{import_issue:'Entrada e saída preenchidas na mesma linha'}:{})});
+   result.transactions.push({id:crypto.randomUUID(),name,amount,type,category:matchedCat,date:dt,...withSourceDate(rawDate,dt),...source,...(conflict?{import_issue:'Entrada e saída preenchidas na mesma linha'}:{})});
   }else{
    // Row without detected header yet: inspect cells structurally
    let dt='',rawDate='',signed=0,catMatch='',texts=[];
@@ -428,13 +458,13 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false}={}){
    const instMatch=fullText.match(/\b(\d{1,3})\s*(?:x|parcelas?)\b/i);
    if(/\b(d[ií]vida|empr[eé]stimo|financiamento)\b/i.test(fullText)||instMatch){
     const inst=instMatch?Math.max(1,Math.min(360,Number(instMatch[1]))):1;
-    result.debts.push({id:crypto.randomUUID(),name:name.replace(/^(d[ií]vida|parcelamento)\s*:?\s*/i,'').slice(0,80)||'Dívida importada',total:Math.abs(signed),balance:Math.abs(signed),installments:inst,due:dt,...withSourceDate(rawDate,dt)});
+    result.debts.push({id:crypto.randomUUID(),name:name.replace(/^(d[ií]vida|parcelamento)\s*:?\s*/i,'').slice(0,80)||'Dívida importada',total:Math.abs(signed),balance:Math.abs(signed),installments:inst,due:dt,...withSourceDate(rawDate,dt),...source});
    }else if(/\b(meta|objetivo|reserva)\b/i.test(fullText)){
-    result.goals.push({id:crypto.randomUUID(),name:name.replace(/^(meta|objetivo)\s*:?\s*/i,'').slice(0,80)||'Objetivo importado',target:Math.abs(signed),saved:0,emoji:'🌱',deadline:''});
+    result.goals.push({id:crypto.randomUUID(),name:name.replace(/^(meta|objetivo)\s*:?\s*/i,'').slice(0,80)||'Objetivo importado',target:Math.abs(signed),saved:0,emoji:'🌱',deadline:'',...source});
    }else{
     const isInc=/\b(sal[aá]rio|receita|entrada|recebi|freela|dep[oó]sito|rendimento)\b/i.test(fullText)&&signed>0;
-    const type=signed<0||!isInc?'expense':'income';
-    result.transactions.push({id:crypto.randomUUID(),name,amount:Math.abs(signed),type,category:catMatch||inferCategory(name,type),date:dt,...withSourceDate(rawDate,dt)});
+    const type=direction||(isInc?'income':'expense');
+    result.transactions.push({id:crypto.randomUUID(),name,amount:Math.abs(signed),type,category:catMatch||inferCategory(name,type),date:dt,...withSourceDate(rawDate,dt),...source});
    }
   }
  }
@@ -534,6 +564,21 @@ export async function parseXlsxBuffer(buffer,fileName=''){
   const path=sheetPaths.get(attr(m[1],'r:id'))||`xl/worksheets/sheet${attr(m[1],'sheetId')}.xml`;
   if(name&&files[path])sheetNames.set(path,unescapeXML(name));
  }
+ const families=new Map();
+ for(const name of sheetNames.values()){
+  const parts=ledgerFamily(name);
+  if(!parts)continue;
+  const [,family,direction]=parts;
+  if(!families.has(family))families.set(family,new Set());
+  families.get(family).add(direction);
+ }
+ // A matching Receitas/Despesas pair alongside Pessoal is a separate ledger.
+ const businessFamilies=new Set();
+ if([...families.keys()].some(personalSheet)){
+  for(const [family,directions] of families){
+   if(!personalSheet(family)&&directions.size===2)businessFamilies.add(family);
+  }
+ }
  const shared=[];
  if(files['xl/sharedStrings.xml']){
   for(const m of files['xl/sharedStrings.xml'].matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)){
@@ -581,7 +626,8 @@ export async function parseXlsxBuffer(buffer,fileName=''){
    }
    if(row.some(c=>c&&String(c).trim()))sheetRows.push(Array.from({length:row.length},(_,i)=>row[i]??''));
   }
-  parseTableRows(sheetRows,result,sheetNames.get(path)||'',{date1904,year:importPeriod(fileName).year});
+  const sheet=sheetNames.get(path)||'';
+  parseTableRows(sheetRows,result,sheet,{sheet,date1904,year:importPeriod(fileName).year,businessFamilies});
  }
  return result;
 }
