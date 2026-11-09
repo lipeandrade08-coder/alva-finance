@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyData } from '../dist/finance.js';
+import { readFile } from 'node:fs/promises';
+import { emptyData, totals } from '../dist/finance.js';
 import { businessTotals } from '../dist/business.js';
 import { applyReviewedImport, planImport, readImportFile, readPastedImport, undoReviewedImport } from '../dist/import-review.js';
 
@@ -102,4 +103,61 @@ test('desfazer preserva registros alterados ou vinculados depois da importação
   state.transactions[0].amount = 2000;
   await assert.rejects(undoReviewedImport(state, batch.id), /alterados/);
   assert.equal(state.transactions[0].amount, 2000);
+});
+
+test('importa CSV com vários meses e anos, sem confundir decimais, saldos e totais com movimentações', async () => {
+  const document = await readPastedImport([
+    'sep=;',
+    'Data do lançamento;Descrição;Saldo;Valor da movimentação;Tipo;Parcelas',
+    '31/12/2024;"Material; loja";5000;35.50;Saída;2',
+    '2025-01-02T00:15:00+03:00;Crédito;5010;1.234,56;Entrada;',
+    '04/02/2025;"Descrição com',
+    'quebra";5100;R$ -12,05;Saída;',
+    '28/02/2025;Total do mês;5000;5.000,00;Entrada;',
+    '31/02/2025;Data impossível;5010;20,00;Saída;',
+    ';Sem data;5020;22,00;Saída;',
+    '05/02/2025;Sem valor de movimento;5000;;Entrada;'
+  ].join('\r\n'));
+  const state = emptyData();
+  const plan = planImport(state, [document]);
+  assert.deepEqual(plan.selected.map(row => [row.record.date, row.record.amount, row.record.type]), [
+    ['2024-12-31', 3550, 'expense'],
+    ['2025-01-02', 123456, 'income'],
+    ['2025-02-04', 1205, 'expense']
+  ]);
+  assert.equal(plan.periods.get('undated').count, 2);
+  assert.equal(plan.periods.get('2025-01').income, 123456);
+  assert.equal(plan.periods.get('2025-02').expense, 1205);
+  assert.equal(plan.rows.find(row => row.record.name === 'Data impossível').sourceDate, '31/02/2025');
+  const missing = plan.rows.find(row => row.record.name === 'Sem data');
+  await applyReviewedImport(state, [document], { dates: new Map([[missing.key, '2025-03-01']]) });
+  assert.equal(totals(state, '2024-12').expense, 3550);
+  assert.equal(totals(state, '2025-02').expense, 1205);
+  assert.equal(totals(state, '2025-03').expense, 2200);
+  assert.equal(state.transactions.length, 4);
+});
+
+for (const system of [1900, 1904]) {
+  test(`Excel ${system} mantém as datas por aba, preserva células vazias e não importa totais`, async () => {
+    const bytes = await readFile(new URL(`./fixtures/importacao-${system}.xlsx`, import.meta.url));
+    const document = await readImportFile(file(`extrato-${system}.xlsx`, bytes));
+    const state = emptyData();
+    const plan = planImport(state, [document]);
+    assert.deepEqual(plan.selected.map(row => [row.record.date, row.record.amount]), [
+      ['2024-01-03', 1875], ['2024-01-31', 240000], ['2025-02-06', 35050], ['2025-02-08', 2505]
+    ]);
+    assert.equal(plan.periods.get('undated').count, 1);
+    assert.equal(plan.rows.length, 5);
+    await applyReviewedImport(state, [document], { destination: 'business' });
+    assert.equal(businessTotals(state.business, '2024-01').spent, 1875);
+    assert.equal(businessTotals(state.business, '2025-02').spent, 2505);
+  });
+}
+
+test('mês informado no arquivo não faz data vazia ou ano ambíguo cair no mês atual', async () => {
+  const document = await readPastedImport('Dezembro 2024\nDia;Descrição;Receita\n28;Venda de dezembro;1.500\nJaneiro\nDia;Descrição;Receita\n2;Venda sem ano;250,00');
+  const plan = planImport(emptyData(), [document]);
+  assert.deepEqual(plan.rows.map(row => [row.period,row.record.type,row.record.amount]), [
+    ['2024-12','income',150000], ['undated','income',25000]
+  ]);
 });

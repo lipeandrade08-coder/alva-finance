@@ -22,3 +22,11 @@
  .import-include { min-height: 44px; }
  .import-pages .button { min-height: 44px; padding-inline: 9px; }
 }
+.import-period { display: flex; flex-wrap: wrap; align-items: end; gap: 9px 18px; }
+.import-period-totals { display: flex; flex-wrap: wrap; gap: 4px 13px; color: #315341; font-size: 12px; }
+.import-period-totals strong { margin-left: 3px; }
+.import-month-heading { padding: 7px 12px; background: #edf4eb; color: #315341; font-size: 11px; font-weight: 750; }
+.import-date-editor { font-size: 11px; }
+.import-date-editor summary { cursor: pointer; color: #315341; }
+.import-date-editor input { max-width: 100%; min-width: 0; margin-top: 5px; }
+.period select { min-width: 100px; max-width: 100%; padding: 5px 4px; border: 0; background: transparent; color: #315341; font: inherit; font-size: 12px; }

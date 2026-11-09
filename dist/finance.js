@@ -1,3 +1,5 @@
+import { excelDate, importPeriod, isExcelDateCell, isImportDateText, parseImportDate } from './import-dates.js';
+
 export const categories=['Alimentação','Moradia','Transporte','Saúde','Lazer','Compras','Educação','Assinaturas','Dívidas','Metas','Investimentos','Salário','Freelance','Outros'];
 export const money=value=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format((value||0)/100);
 export const escapeHTML=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -200,41 +202,14 @@ export function inferCategory(name,type='expense'){
  return 'Outros';
 }
 const normStr=s=>String(s??'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
-function isExcelSerialDate(v){
- const s=String(v??'').trim();
- if(!/^\d{5}(?:\.\d+)?$/.test(s))return false;
- const n=Number(s);return n>=36526&&n<=60000;
-}
-function excelSerialToISO(n){
- const days=Math.floor(Number(n));
- const dt=new Date(Math.round((days-25569)*86400*1000)+43200000);
- return dateISO(dt);
-}
-function isDateLikeCell(raw){
- const s=String(raw??'').trim();if(!s)return false;
- if(/^\d{4}-\d{2}-\d{2}(?:[T\s].*)?$/.test(s))return true;
- if(/^\d{1,2}[\/.-]\d{1,2}(?:[\/.-]\d{2,4})?$/.test(s))return true;
- return false;
-}
-export function parseFlexDate(raw,fallback=dateISO()){
+export function parseFlexDate(raw,fallback=''){
  if(raw instanceof Date&&!isNaN(raw))return dateISO(raw);
- const s=String(raw??'').trim();if(!s)return fallback;
- if(/^\d{4}-\d{2}-\d{2}/.test(s))return s.slice(0,10);
- const br=s.match(/^(\d{1,2})[\/.-](\d{1,2})(?:[\/.-](\d{2,4}))?$/);
- if(br){
-  let d=Number(br[1]),m=Number(br[2]),y=br[3]?Number(br[3]):Number(fallback.slice(0,4)||new Date().getFullYear());
-  if(y<100)y+=2000;
-  if(m>12&&d<=12)[d,m]=[m,d];
-  if(m>=1&&m<=12&&d>=1&&d<=31)return `${String(y).padStart(4,'0')}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
- }
- const ofx=s.match(/^(\d{4})(\d{2})(\d{2})/);if(ofx)return `${ofx[1]}-${ofx[2]}-${ofx[3]}`;
- if(isExcelSerialDate(s))return excelSerialToISO(Number(s));
- return fallback;
+ return parseImportDate(raw,{serial:true})||fallback;
 }
 export function parseFlexAmount(raw){
  if(typeof raw==='number')return Number.isFinite(raw)&&raw!==0?Math.round(raw*100):0;
  let s=String(raw??'').trim();if(!s)return 0;
- if(isDateLikeCell(s))return 0;
+ if(isImportDateText(s))return 0;
  const neg=/^\s*-|\(.*\)|-\s*R\$|\b(d[eé]bito|sa[ií]da|despesa)\b/i.test(s)&&!/\b(entrada|receita|cr[eé]dito)\b/i.test(s);
  s=s.replace(/[^\d.,-]/g,'').replace(/^-+/,'');if(!s)return 0;
  if(s.includes(',')&&s.includes('.')){
@@ -244,112 +219,166 @@ export function parseFlexAmount(raw){
   const parts=s.split(',');
   if(parts.length===2&&parts[1].length===3&&parts[0].length<=3)s=s.replace(',','');
   else s=s.replace(',','.');
+ }else if(/^[1-9]\d{0,2}(?:\.\d{3})+$/.test(s)){
+  s=s.replace(/\./g,'');
  }
  const n=Number(s);if(!Number.isFinite(n)||n===0||Math.abs(n)>1e8)return 0;
  return Math.round(Math.abs(n)*100)*(neg?-1:1);
 }
-function splitCSVLine(line,sep){
- const out=[];let cur='',inQuotes=false;
- for(let i=0;i<line.length;i++){const ch=line[i];if(ch==='"'){if(inQuotes&&line[i+1]==='"'){cur+='"';i++;}else inQuotes=!inQuotes;}else if(ch===sep&&!inQuotes){out.push(cur.trim());cur='';}else cur+=ch;}
- out.push(cur.trim());return out;
+function parseDelimited(text, separator, limit=Infinity){
+ const rows=[];
+ let row=[], field='', quoted=false;
+ for(let i=0;i<text.length;i++){
+  const char=text[i];
+  if(char==='"'&&(quoted||!field.trim())){
+   if(quoted&&text[i+1]==='"'){field+='"';i++;}
+   else quoted=!quoted;
+  }else if(!quoted&&char===separator){
+   row.push(field.trim());field='';
+  }else if(!quoted&&(char==='\r'||char==='\n')){
+   if(char==='\r'&&text[i+1]==='\n')i++;
+   row.push(field.trim());
+   if(row.some(Boolean))rows.push(row);
+   if(rows.length===limit)return rows;
+   row=[];field='';
+  }else field+=char;
+ }
+ row.push(field.trim());
+ if(row.some(Boolean))rows.push(row);
+ return rows;
 }
-function parseTableRows(rows,result,sheetHint=''){
+
+function detectDelimiter(text){
+ const excel=text.match(/^sep=(.)\r?\n/i);
+ if(excel&&[';','\t',',','|'].includes(excel[1]))return {separator:excel[1],text:text.slice(excel[0].length)};
+ const candidates=[';','\t',',','|'].map(separator=>{
+  const rows=parseDelimited(text,separator,25);
+  const counts=new Map();
+  let header=false;
+  for(const row of rows){
+   if(row.length>1)counts.set(row.length,(counts.get(row.length)||0)+1);
+   if(row.map(normStr).some(c=>/^(?:descri[cç]ao|historico|nome|data|valor)(?:\b|$)/.test(c))&&row.length>=3)header=true;
+  }
+  const consistent=Math.max(0,...counts.values());
+  return {separator,score:consistent>0?consistent+(header?30:0):0};
+ });
+ const best=candidates.sort((a,b)=>b.score-a.score)[0];
+ return {separator:best.score?best.separator:'\0',text};
+}
+
+const summaryRow = value => /^(?:total|subtotal|soma|resumo|saldo)(?:$|\s*[:=]|\s+(?:anterior|final|inicial|geral|do|de|das|dos|receitas|despesas|entradas|saidas|mensal|pago|janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\b)/.test(normStr(value));
+const withSourceDate = (raw,date) => !date && String(raw??'').trim() ? { import_date_raw:String(raw).trim().slice(0,80) } : {};
+function typedColumnAmount(raw){
+ if(typeof raw==='number')return parseFlexAmount(raw);
+ let text=String(raw??'').trim().replace('−','-');
+ if(/^\(.*\)$/.test(text))text='-'+text.slice(1,-1).trim();
+ text=text.replace(/^([+-]?)\s*R\$\s*/i,'$1').replace(/\s/g,'');
+ return /^[+-]?\d[\d.,]*$/.test(text)?parseFlexAmount(text):0;
+}
+
+function parseTableRows(rows,result,sheetHint='', {year,date1904=false}={}){
  if(!rows?.length)return;
  let colMap=null;
  const hintNorm=normStr(sheetHint);
+ const sheetPeriod=importPeriod(sheetHint,year);
+ let period=sheetPeriod,yearHint=sheetPeriod.year;
+ const readDate=value=>parseImportDate(value,{period,date1904,serial:true});
  for(let r=0;r<rows.length;r++){
-  const row=rows[r].map(c=>String(c??'').trim());
+  const cells=rows[r];
+  const row=cells.map(c=>String(c??'').trim());
   const nonEmpty=row.filter(Boolean);
-  if(nonEmpty.length<2)continue;
+  if(nonEmpty.length===1){
+   const label=normStr(nonEmpty[0]);
+   const hint=importPeriod(label,yearHint);
+   if(hint.month&&!isImportDateText(label))period=hint;
+   else if(/^ano\s*[:\-]?\s*\d{4}$/.test(label)){yearHint=hint.year;period={...period,year:yearHint};}
+  }
+  if(nonEmpty.length<2 && !(row.length===1&&isImportDateText(row[0].split(/\s+/)[0])))continue;
   const headers=row.map(normStr);
-  const descIdx=headers.findIndex(h=>/\b(descricao|historico|nome|titulo|lancamento|item|estabelecimento|divida|meta|objetivo|investimento|conta|gasto|despesa|receita|origem|referencia|detalhe|credor|fornecedor|cliente)\b/.test(h));
-  const valIdx=headers.findIndex(h=>/\b(valor|quantia|total|saldo|montante|preco|entrada|saida|amount|meta|alvo|parcela|aplicado|aberto)\b/.test(h));
-  if(descIdx>=0&&valIdx>=0&&descIdx!==valIdx&&!row.some(c=>isDateLikeCell(c))){
+  const dates=/\b(data|dt|dia|competencia|emissao|date)\b/;
+  let descIdx=headers.findIndex(h=>/\b(descricao|description|historico|nome|titulo|estabelecimento|detalhe|credor|fornecedor|cliente)\b/.test(h)&&!dates.test(h));
+  if(descIdx<0)descIdx=headers.findIndex(h=>/^(lancamento|item|divida|meta|objetivo|investimento|conta|origem|referencia)$/.test(h));
+  const valIdx=headers.findIndex((h,i)=>i!==descIdx&&/\b(valor|quantia|total|saldo|montante|preco|entrada|entradas|receita|receitas|saida|saidas|despesa|despesas|credito|debito|amount|value|meta|alvo|parcela|aplicado|aberto)\b/.test(h));
+  if(descIdx>=0&&valIdx>=0&&!row.some(c=>isImportDateText(c))){
    colMap={
     name:descIdx,
-    amount:headers.findIndex((h,i)=>i!==descIdx&&/\b(valor|quantia|montante|preco|amount|valor pago|valor aplicado)\b/.test(h)),
-    incomeCol:headers.findIndex(h=>/\b(entrada|entradas|receita|receitas|credito|ganho)\b/.test(h)),
-    expenseCol:headers.findIndex(h=>/\b(saida|saidas|despesa|despesas|debito|gasto|gastos)\b/.test(h)),
+    amount:headers.findIndex((h,i)=>i!==descIdx&&!/\b(saldo|acumulado|orcamento|limite)\b/.test(h)&&/\b(valor|quantia|montante|preco|amount|value)\b/.test(h)),
+    incomeCol:headers.findIndex((h,i)=>i!==descIdx&&!dates.test(h)&&!/\b(tipo|categoria|saldo|total|limite|orcamento)\b/.test(h)&&/\b(entrada|entradas|receita|receitas|credito|ganho|credit)\b/.test(h)),
+    expenseCol:headers.findIndex((h,i)=>i!==descIdx&&!dates.test(h)&&!/\b(tipo|categoria|saldo|total|limite|orcamento)\b/.test(h)&&/\b(saida|saidas|despesa|despesas|debito|gasto|gastos|debit)\b/.test(h)),
     total:headers.findIndex((h,i)=>i!==descIdx&&/\b(total|valor total|meta|alvo|objetivo)\b/.test(h)),
     balance:headers.findIndex((h,i)=>i!==descIdx&&/\b(saldo|aberto|restante|devedor)\b/.test(h)),
     saved:headers.findIndex((h,i)=>i!==descIdx&&/\b(guardado|acumulado|ja pago|pago)\b/.test(h)),
-    type:headers.findIndex(h=>/\b(tipo|natureza|movimentacao|fluxo|operacao|status)\b/.test(h)),
-    category:headers.findIndex(h=>/\b(categoria|classificacao|grupo|setor|area)\b/.test(h)),
-    date:headers.findIndex(h=>/\b(data|dt|dia|competencia|emissao|compra)\b/.test(h)),
+    type:headers.findIndex((h,i)=>i!==descIdx&&/\b(tipo|natureza|fluxo|operacao|type)\b/.test(h)),
+    category:headers.findIndex(h=>/\b(categoria|classificacao|grupo|setor|area|category)\b/.test(h)),
+    date:headers.findIndex((h,i)=>i!==descIdx&&dates.test(h)&&!/\b(vencimento|prazo)\b/.test(h)),
     due:headers.findIndex(h=>/\b(vencimento|prazo|ate|limite)\b/.test(h)),
     installments:headers.findIndex(h=>/\b(parcela|parcelas|qtd|vezes)\b/.test(h)),
-    section:/divida|devedor|emprestimo/.test(hintNorm)||headers.some(h=>/\b(divida|parcelas|saldo devedor)\b/.test(h))&&!headers.some(h=>/\b(entrada|receita)\b/.test(h))?'debt':/meta|objetivo/.test(hintNorm)||headers.some(h=>/\b(meta|objetivo|valor alvo|guardado)\b/.test(h))?'goal':/investimento/.test(hintNorm)||headers.some(h=>/\b(investimento|valor aplicado|modalidade)\b/.test(h))?'investment':'transaction'
+    section:/divida|devedor|emprestimo/.test(hintNorm)||headers.some(h=>/\b(divida|saldo devedor|credor)\b/.test(h))&&!headers.some(h=>/\b(entrada|receita)\b/.test(h))?'debt':/meta|objetivo/.test(hintNorm)||headers.some(h=>/\b(meta|objetivo|valor alvo|guardado)\b/.test(h))?'goal':/investimento/.test(hintNorm)||headers.some(h=>/\b(investimento|valor aplicado|modalidade)\b/.test(h))?'investment':'transaction'
    };
-   if(colMap.amount<0)colMap.amount=valIdx;
+   if(colMap.amount<0 && colMap.section!=='transaction')colMap.amount=valIdx;
    continue;
   }
   if(colMap){
    const get=idx=>idx>=0&&idx<row.length?row[idx]:'';
-   let name=get(colMap.name);
-   if(!name){
-    name=row.find((c,i)=>i!==colMap.amount&&i!==colMap.date&&i!==colMap.category&&c&&!isDateLikeCell(c)&&!isExcelSerialDate(c)&&parseFlexAmount(c)===0)||'';
-   }
-   name=String(name||'').trim().slice(0,100);
-   if(!name||/^(total|subtotal|soma|saldo anterior|saldo final|resumo)$/i.test(normStr(name)))continue;
-   const typeCell=normStr(get(colMap.type)),catCell=String(get(colMap.category)||'').trim();
+   const value=idx=>idx>=0&&idx<cells.length?cells[idx]:'';
+   const name=get(colMap.name).slice(0,100);
+   if(!name||summaryRow(name))continue;
+   const typeCell=normStr(get(colMap.type)),catCell=get(colMap.category);
    const kind=/\b(divida|emprestimo|financiamento)\b/.test(typeCell)||(colMap.section==='debt'&&colMap.installments>=0)?'debt':/\b(meta|objetivo|reserva)\b/.test(typeCell)||colMap.section==='goal'?'goal':/\b(investimento|aplicacao|renda fixa|fundo|acoes)\b/.test(typeCell)||colMap.section==='investment'?'investment':'transaction';
-   const rawDate=get(colMap.date)||get(colMap.due);
-   const dt=parseFlexDate(rawDate);
+   const rawDate=get(colMap.date>=0?colMap.date:colMap.due);
+   const dt=readDate(rawDate);
    if(kind==='debt'){
-    const bal=Math.abs(parseFlexAmount(get(colMap.balance)||get(colMap.amount)||get(colMap.total)));
-    const tot=Math.abs(parseFlexAmount(get(colMap.total)||get(colMap.amount)))||bal;
+    const balanceCell=value(colMap.balance);
+    const bal=Math.abs(typedColumnAmount(balanceCell===''?value(colMap.amount)||value(colMap.total):balanceCell));
+    const tot=Math.abs(typedColumnAmount(value(colMap.total)||value(colMap.amount)))||bal;
     if(bal>0||tot>0){
-     const inst=Math.max(1,Math.min(360,Math.round(Number(String(get(colMap.installments)||'1').replace(/\D/g,''))||1)));
-     result.debts.push({id:crypto.randomUUID(),name:name.slice(0,80),total:Math.max(tot,bal),balance:bal||tot,installments:inst,due:parseFlexDate(get(colMap.due)||rawDate)});
+     const inst=Math.max(1,Math.min(360,Math.round(Number(get(colMap.installments))||1)));
+     const dueRaw=get(colMap.due)||rawDate,due=readDate(dueRaw);
+     result.debts.push({id:crypto.randomUUID(),name:name.slice(0,80),total:Math.max(tot,bal),balance:bal,installments:inst,due,...withSourceDate(dueRaw,due)});
     }
     continue;
    }
    if(kind==='goal'){
-    const target=Math.abs(parseFlexAmount(get(colMap.total)||get(colMap.amount)));
-    const saved=Math.abs(parseFlexAmount(get(colMap.saved)));
-    if(target>0)result.goals.push({id:crypto.randomUUID(),name:name.slice(0,80),target,saved:Math.min(target,saved),emoji:'🌱',deadline:parseFlexDate(get(colMap.due)||rawDate,'')});
+    const target=Math.abs(typedColumnAmount(value(colMap.total)||value(colMap.amount)));
+    const saved=Math.abs(typedColumnAmount(value(colMap.saved)));
+    const deadlineRaw=get(colMap.due)||rawDate,deadline=readDate(deadlineRaw);
+    if(target>0)result.goals.push({id:crypto.randomUUID(),name:name.slice(0,80),target,saved:Math.min(target,saved),emoji:'🌱',deadline,...withSourceDate(deadlineRaw,deadline)});
     continue;
    }
    if(kind==='investment'){
-    const amt=Math.abs(parseFlexAmount(get(colMap.amount)||get(colMap.total)||get(colMap.balance)));
+    const amt=Math.abs(typedColumnAmount(value(colMap.amount)||value(colMap.total)||value(colMap.balance)));
     if(amt>0)result.investments.push({id:crypto.randomUUID(),name:name.slice(0,80),amount:amt,kind:catCell||'Renda fixa'});
     continue;
    }
-   let signed=0,explicitType='';
-   if(colMap.incomeCol>=0&&colMap.expenseCol>=0&&colMap.incomeCol!==colMap.expenseCol){
-    const inc=Math.abs(parseFlexAmount(get(colMap.incomeCol))),exp=Math.abs(parseFlexAmount(get(colMap.expenseCol)));
-    if(inc>0){signed=inc;explicitType='income';}else if(exp>0){signed=-exp;explicitType='expense';}
-   }
-   if(!signed){
-    const candidate=get(colMap.amount)||get(colMap.total)||get(colMap.balance)||row.find((c,i)=>i!==colMap.name&&i!==colMap.date&&i!==colMap.category&&!isExcelSerialDate(c)&&parseFlexAmount(c)!==0)||'';
-    signed=parseFlexAmount(candidate);
-   }
-   if(!signed)continue;
-   let type=explicitType||(signed<0?'expense':'income');
-   if(/\b(saida|despesa|debito|pagamento|gasto|compra)\b/.test(typeCell))type='expense';
-   else if(/\b(entrada|receita|credito|ganho|salario|venda)\b/.test(typeCell))type='income';
-   else if(!explicitType&&signed>0&&colMap.type<0){
-    const isIncName=/\b(sal[aá]rio|freela|recebimento|dep[oó]sito|pix recebido|renda|pro-labore|pr[oó]-labore|venda|reembolso|dividendo)\b/i.test(name)||/\b(sal[aá]rio|freelance|receita|entrada)\b/i.test(catCell);
-    if(!isIncName)type='expense';
-   }
+   const income=Math.abs(typedColumnAmount(value(colMap.incomeCol)));
+   const expense=Math.abs(typedColumnAmount(value(colMap.expenseCol)));
+   const signed=typedColumnAmount(value(colMap.amount));
+   const conflict=income>0&&expense>0;
+   const amount=income||expense||Math.abs(signed);
+   if(!amount)continue;
+   let type='expense';
+   if(income&&!expense)type='income';
+   else if(!expense&&/^(?:c|income|credit)$|\b(entrada|receita|credito|ganho|salario|venda)\b/.test(typeCell))type='income';
+   else if(!expense&&!/^(?:d|expense|debit)$|\b(saida|despesa|debito|pagamento|gasto|compra)\b/.test(typeCell)&&signed>0&&
+    (/\b(salario|freela|recebimento|deposito|pix recebido|renda|pro.labore|venda|reembolso|dividendo)\b/.test(normStr(name))||/\b(salario|freelance|receita|entrada)\b/.test(normStr(catCell))))type='income';
    const matchedCat=categories.find(c=>normStr(c)===normStr(catCell))||inferCategory(name,type);
-   result.transactions.push({id:crypto.randomUUID(),name,amount:Math.abs(signed),type,category:matchedCat,date:dt});
+   result.transactions.push({id:crypto.randomUUID(),name,amount,type,category:matchedCat,date:dt,...withSourceDate(rawDate,dt),...(conflict?{import_issue:'Entrada e saída preenchidas na mesma linha'}:{})});
   }else{
    // Row without detected header yet: inspect cells structurally
-   let dt=dateISO(),hasDate=false,signed=0,catMatch='',texts=[];
-   for(const cell of row){
+   let dt='',rawDate='',signed=0,catMatch='',texts=[];
+   for(const [i,cell] of row.entries()){
     if(!cell)continue;
-    if(!hasDate&&(isDateLikeCell(cell)||isExcelSerialDate(cell))){dt=parseFlexDate(cell);hasDate=true;continue;}
+    if(!rawDate&&(isImportDateText(cell)||(i===0&&isExcelDateCell(cell)))){rawDate=cell;dt=readDate(cell);continue;}
     const foundCat=categories.find(c=>normStr(c)===normStr(cell));
     if(foundCat&&!catMatch){catMatch=foundCat;continue;}
-    const val=parseFlexAmount(cell);
-    if(val!==0&&!isExcelSerialDate(cell)&&signed===0){signed=val;continue;}
+    const val=typedColumnAmount(cells[i]);
+    if(val!==0&&signed===0){signed=val;continue;}
     if(!/^(pix|boleto|cr[eé]dito|d[eé]bito|dinheiro|transfer[eê]ncia|pago|pendente)$/i.test(cell))texts.push(cell);
    }
    if(!signed&&row.length===1){
     const line=row[0];
     const dtM=line.match(/\b(\d{1,2}[\/.-]\d{1,2}(?:[\/.-]\d{2,4})?|\d{4}-\d{2}-\d{2})\b/);
-    if(dtM)dt=parseFlexDate(dtM[1]);
+    if(dtM){rawDate=dtM[1];dt=readDate(rawDate);}
     const withoutDate=dtM?line.replace(dtM[0],' '):line;
     const numM=[...withoutDate.matchAll(/(?:R\$\s*)?-?\d{1,3}(?:\.\d{3})*(?:,\d{1,2})|(?:R\$\s*)?-?\d+(?:[.,]\d{1,2})\b/g)];
     const valStr=numM.at(-1)?.[0];
@@ -362,17 +391,17 @@ function parseTableRows(rows,result,sheetHint=''){
    if(!signed||!texts.length)continue;
    const fullText=row.join(' ');
    const name=texts[0].slice(0,100);
-   if(/^(total|subtotal|soma|saldo)$/i.test(normStr(name)))continue;
+   if(summaryRow(name))continue;
    const instMatch=fullText.match(/\b(\d{1,3})\s*(?:x|parcelas?)\b/i);
    if(/\b(d[ií]vida|empr[eé]stimo|financiamento)\b/i.test(fullText)||instMatch){
     const inst=instMatch?Math.max(1,Math.min(360,Number(instMatch[1]))):1;
-    result.debts.push({id:crypto.randomUUID(),name:name.replace(/^(d[ií]vida|parcelamento)\s*:?\s*/i,'').slice(0,80)||'Dívida importada',total:Math.abs(signed),balance:Math.abs(signed),installments:inst,due:dt});
+    result.debts.push({id:crypto.randomUUID(),name:name.replace(/^(d[ií]vida|parcelamento)\s*:?\s*/i,'').slice(0,80)||'Dívida importada',total:Math.abs(signed),balance:Math.abs(signed),installments:inst,due:dt,...withSourceDate(rawDate,dt)});
    }else if(/\b(meta|objetivo|reserva)\b/i.test(fullText)){
     result.goals.push({id:crypto.randomUUID(),name:name.replace(/^(meta|objetivo)\s*:?\s*/i,'').slice(0,80)||'Objetivo importado',target:Math.abs(signed),saved:0,emoji:'🌱',deadline:''});
    }else{
     const isInc=/\b(sal[aá]rio|receita|entrada|recebi|freela|dep[oó]sito|rendimento)\b/i.test(fullText)&&signed>0;
     const type=signed<0||!isInc?'expense':'income';
-    result.transactions.push({id:crypto.randomUUID(),name,amount:Math.abs(signed),type,category:catMatch||inferCategory(name,type),date:dt});
+    result.transactions.push({id:crypto.randomUUID(),name,amount:Math.abs(signed),type,category:catMatch||inferCategory(name,type),date:dt,...withSourceDate(rawDate,dt)});
    }
   }
  }
@@ -385,9 +414,9 @@ export function parseDocumentContent(text,fileName=''){
    const j=JSON.parse(raw);const items=Array.isArray(j)?j:j.transactions||[];
    if(j.profile?.name)result.profile.name=String(j.profile.name).slice(0,70);
    if(Array.isArray(j.debts))for(const d of j.debts){const total=Math.abs(parseFlexAmount(d.total??d.balance??d.amount))||(Number.isInteger(d.total)?d.total:0);const balance=Math.abs(parseFlexAmount(d.balance??d.total??d.amount))||(Number.isInteger(d.balance)?d.balance:total);if(total>0&&d.name)result.debts.push({id:crypto.randomUUID(),name:String(d.name).trim().slice(0,80),total:Math.max(total,balance),balance,installments:Math.max(1,Math.min(360,Math.round(Number(d.installments||d.parcelas)||1))),due:parseFlexDate(d.due||d.vencimento)});}
-   if(Array.isArray(j.goals))for(const g of j.goals){const target=Math.abs(parseFlexAmount(g.target??g.amount))||(Number.isInteger(g.target)?g.target:0);const saved=Math.abs(parseFlexAmount(g.saved))||(Number.isInteger(g.saved)?g.saved:0);if(target>0&&g.name)result.goals.push({id:crypto.randomUUID(),name:String(g.name).trim().slice(0,80),target,saved:Math.min(target,saved),emoji:String(g.emoji||'🌱').slice(0,10),deadline:parseFlexDate(g.deadline||'')});}
+   if(Array.isArray(j.goals))for(const g of j.goals){const target=Math.abs(parseFlexAmount(g.target??g.amount))||(Number.isInteger(g.target)?g.target:0);const saved=Math.abs(parseFlexAmount(g.saved))||(Number.isInteger(g.saved)?g.saved:0);if(target>0&&g.name)result.goals.push({id:crypto.randomUUID(),name:String(g.name).trim().slice(0,80),target,saved:Math.min(target,saved),emoji:String(g.emoji||'🌱').slice(0,10),deadline:parseFlexDate(g.deadline||''),...withSourceDate(g.deadline,parseFlexDate(g.deadline))});}
    if(Array.isArray(j.investments))for(const i of j.investments){const amount=Math.abs(parseFlexAmount(i.amount))||(Number.isInteger(i.amount)?i.amount:0);if(amount>0&&i.name)result.investments.push({id:crypto.randomUUID(),name:String(i.name).trim().slice(0,80),amount,kind:String(i.kind||i.category||'Renda fixa').slice(0,40)});}
-   for(const t of items){const rawAmt=Number.isInteger(t.amount)&&t.type?t.amount*(t.type==='expense'?-1:1):parseFlexAmount(t.amount??t.valor);const amount=Math.abs(rawAmt);if(amount>0&&(t.name||t.descricao)){const type=t.type==='income'||t.type==='expense'?t.type:rawAmt<0?'expense':'income';const name=String(t.name||t.descricao).trim().slice(0,100);const cat=categories.includes(t.category)?t.category:inferCategory(name,type);result.transactions.push({id:crypto.randomUUID(),name,amount,type,category:cat,date:parseFlexDate(t.date||t.data)});}}
+   for(const t of items){const rawAmt=Number.isInteger(t.amount)&&t.type?t.amount*(t.type==='expense'?-1:1):parseFlexAmount(t.amount??t.valor);const amount=Math.abs(rawAmt);if(amount>0&&(t.name||t.descricao)){const type=t.type==='income'||t.type==='expense'?t.type:rawAmt<0?'expense':'income';const name=String(t.name||t.descricao).trim().slice(0,100);const cat=categories.includes(t.category)?t.category:inferCategory(name,type);result.transactions.push({id:crypto.randomUUID(),name,amount,type,category:cat,date:parseFlexDate(t.date||t.data),...withSourceDate(t.date||t.data,parseFlexDate(t.date||t.data))});}}
    return result;
   }catch{}
  }
@@ -399,24 +428,22 @@ export function parseDocumentContent(text,fileName=''){
   const blocks=raw.split(/<STMTTRN>/i).slice(1);
   for(const b of blocks){
    const amtMatch=b.match(/<TRNAMT>([^\r\n<]+)/i),dtMatch=b.match(/<DTPOSTED>([^\r\n<]+)/i),memoMatch=b.match(/<(?:MEMO|NAME)>([^\r\n<]+)/i);
-   const signed=parseFlexAmount(amtMatch?.[1]);if(!signed)continue;
+   const number=amtMatch?.[1]?.trim()||'';
+   const signed=/^[+-]?\d+(?:\.\d+)?$/.test(number)?parseFlexAmount(Number(number)):0;
+   if(!signed)continue;
    const type=signed<0?'expense':'income',amount=Math.abs(signed),name=String(memoMatch?.[1]||'Movimentação bancária').trim().slice(0,100);
    const reference=b.match(/<FITID>([^\r\n<]+)/i)?.[1]?.trim();
-   result.transactions.push({id:crypto.randomUUID(),name,amount,type,category:inferCategory(name,type),date:parseFlexDate(dtMatch?.[1]),...(reference?{ofx_reference:reference.slice(0,200)}:{})});
+   result.transactions.push({id:crypto.randomUUID(),name,amount,type,category:inferCategory(name,type),date:parseFlexDate(dtMatch?.[1]),...withSourceDate(dtMatch?.[1],parseFlexDate(dtMatch?.[1])),...(reference?{ofx_reference:reference.slice(0,200)}:{})});
   }
   return result;
  }
- const lines=raw.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);if(!lines.length)return result;
- const sample=lines.slice(0,Math.min(10,lines.length)).join('\n');
- const sep=[';','\t',',','|'].sort((a,b)=>(sample.split(b).length-1)-(sample.split(a).length-1))[0];
- const hasDelimiter=(sample.split(sep).length-1)>=lines.slice(0,Math.min(5,lines.length)).length;
- const rows=lines.map(l=>hasDelimiter?splitCSVLine(l,sep):[l]);
- parseTableRows(rows,result,fileName);
+ const {separator,text:delimited}=detectDelimiter(raw);
+ parseTableRows(parseDelimited(delimited,separator),result,fileName);
  return result;
 }
-export async function parseXlsxBuffer(buffer){
+export async function parseXlsxBuffer(buffer,fileName=''){
  const bytes=new Uint8Array(buffer),view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
- const files={};let eocd=-1;
+ const files=Object.create(null);let eocd=-1;
  for(let i=bytes.length-22;i>=Math.max(0,bytes.length-65557);i--){if(view.getUint32(i,true)===0x06054b50){eocd=i;break;}}
  if(eocd<0)throw new Error('Arquivo Excel (.xlsx) inválido.');
  const cdCount=view.getUint16(eocd+10,true),cdOffset=view.getUint32(eocd+16,true);
@@ -427,7 +454,7 @@ export async function parseXlsxBuffer(buffer){
   const method=view.getUint16(pos+10,true),compSize=view.getUint32(pos+20,true),nameLen=view.getUint16(pos+28,true),extraLen=view.getUint16(pos+30,true),commentLen=view.getUint16(pos+32,true),localOffset=view.getUint32(pos+42,true);
   const name=dec.decode(bytes.subarray(pos+46,pos+46+nameLen));
   pos+=46+nameLen+extraLen+commentLen;
-  if(!/^xl\/(sharedStrings\.xml|styles\.xml|workbook\.xml|worksheets\/sheet\d+\.xml)$/.test(name))continue;
+  if(!/^xl\/(sharedStrings\.xml|styles\.xml|workbook\.xml|_rels\/workbook\.xml\.rels|worksheets\/sheet\d+\.xml)$/.test(name))continue;
   if(localOffset+30>bytes.length)throw new Error('Planilha Excel inválida.');
   const lNameLen=view.getUint16(localOffset+26,true),lExtraLen=view.getUint16(localOffset+28,true),dataStart=localOffset+30+lNameLen+lExtraLen;
   if(dataStart+compSize>bytes.length)throw new Error('Planilha Excel inválida.');
@@ -453,7 +480,27 @@ export async function parseXlsxBuffer(buffer){
   }
 
  }
- const unescapeXML=s=>s.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;|&apos;/g,"'").replace(/&amp;/g,'&');
+ const unescapeXML=s=>s.replace(/&(?:#(x[\da-f]+|\d+)|(lt|gt|quot|apos|amp));/gi,(entity,number,named)=>{
+  if(named)return {lt:'<',gt:'>',quot:'"',apos:"'",amp:'&'}[named]??entity;
+  const value=number[0]==='x'?parseInt(number.slice(1),16):Number(number);
+  return value<=0x10ffff?String.fromCodePoint(value):entity;
+ });
+ const attr=(attrs,name)=>attrs.match(new RegExp(`(?:^|\\s)${name}=(["'])(.*?)\\1`))?.[2];
+ const workbook=files['xl/workbook.xml']||'';
+ const date1904=/^(?:1|true)$/i.test(attr(workbook.match(/<workbookPr\b([^>]*)>/)?.[1]||'','date1904')||'');
+ const sheetPaths=new Map();
+ for(const m of (files['xl/_rels/workbook.xml.rels']||'').matchAll(/<Relationship\b([^>]*)\/?>/g)){
+  const id=attr(m[1],'Id'),target=attr(m[1],'Target');
+  if(!id||!target||!attr(m[1],'Type')?.endsWith('/worksheet'))continue;
+  const path=target.startsWith('/')?target.slice(1):'xl/'+target;
+  if(files[path])sheetPaths.set(id,path);
+ }
+ const sheetNames=new Map();
+ for(const m of workbook.matchAll(/<sheet\b([^>]*)\/?>/g)){
+  const name=attr(m[1],'name');
+  const path=sheetPaths.get(attr(m[1],'r:id'))||`xl/worksheets/sheet${attr(m[1],'sheetId')}.xml`;
+  if(name&&files[path])sheetNames.set(path,unescapeXML(name));
+ }
  const shared=[];
  if(files['xl/sharedStrings.xml']){
   for(const m of files['xl/sharedStrings.xml'].matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)){
@@ -462,11 +509,12 @@ export async function parseXlsxBuffer(buffer){
  }
  const dateStyleIds=new Set();
  if(files['xl/styles.xml']){
-  const customDateFmts=new Set([14,15,16,17,18,19,20,21,22,45,46,47]);
+  const customDateFmts=new Set([14,15,16,17,22,27,28,29,30,31,34,35,36,50,51,52,53,54,55,56,57,58]);
   for(const m of files['xl/styles.xml'].matchAll(/<numFmt\b([^>]*)\/?>/g)){
    const id=Number(m[1].match(/\bnumFmtId="(\d+)"/)?.[1]);
    const code=m[1].match(/\bformatCode="([^"]+)"/)?.[1]||'';
-   if(id&&/[dmy]/i.test(code)&&!/[0#]/.test(code.replace(/\[[^\]]*\]/g,'')))customDateFmts.add(id);
+   const tokens=unescapeXML(code).replace(/"[^"]*"|\\.|\[[^\]]*\]/g,'');
+   if(id&&/[dy]/i.test(tokens)&&!/[0#]/.test(tokens))customDateFmts.add(id);
   }
   const xfsSection=files['xl/styles.xml'].match(/<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/)?.[1]||'';
   let idx=0;
@@ -481,22 +529,26 @@ export async function parseXlsxBuffer(buffer){
  for(const [path,xml] of Object.entries(files).sort((a,b)=>a[0].localeCompare(b[0]))){
   if(!path.startsWith('xl/worksheets/'))continue;
   const sheetRows=[];
-  for(const rm of xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)){
+  for(const rm of xml.matchAll(/<row\b[^>]*?(?:\/>|>([\s\S]*?)<\/row>)/g)){
    const row=[];
-   for(const cm of rm[1].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)){
-    const attrs=cm[1],inner=cm[2];
-    const ref=attrs.match(/\br="([A-Z]+\d+)"/)?.[1]||'A1';
-    const type=attrs.match(/\bt="([^"]+)"/)?.[1]||'';
-    const styleIdx=Number(attrs.match(/\bs="(\d+)"/)?.[1]);
-    const vMatch=inner.match(/<v>([\s\S]*?)<\/v>/),isMatch=inner.match(/<is>[\s\S]*?<t\b[^>]*>([\s\S]*?)<\/t>[\s\S]*?<\/is>/);
-    let val=isMatch?unescapeXML(isMatch[1]):vMatch?unescapeXML(vMatch[1]):'';
-    if(type==='s'&&val!=='')val=shared[Number(val)]??val;
-    else if((!type||type==='n')&&val!==''&&dateStyleIds.has(styleIdx)&&isExcelSerialDate(val))val=excelSerialToISO(Number(val));
-    row[colIdx(ref)]=String(val??'').trim();
+   for(const cm of (rm[1]||'').matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)){
+    const attrs=cm[1],inner=cm[2]||'';
+    const ref=attr(attrs,'r');
+    if(!ref||!/^([A-Z]{1,3})\d+$/.test(ref))continue;
+    const type=attr(attrs,'t')||'';
+    const styleIdx=Number(attr(attrs,'s'));
+    const vMatch=inner.match(/<v>([\s\S]*?)<\/v>/),inline=inner.match(/<is>([\s\S]*?)<\/is>/);
+    let val=inline?unescapeXML([...inline[1].matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map(x=>x[1]).join('')):vMatch?unescapeXML(vMatch[1]):'';
+    if(type==='s')val=shared[Number(val)]??'';
+    else if(type==='e'||type==='b')val='';
+    else if((!type||type==='n')&&val!==''&&Number.isFinite(Number(val))){
+     val=dateStyleIds.has(styleIdx)?excelDate(val,date1904)||val:Number(val);
+    }
+    row[colIdx(ref)]=typeof val==='number'?val:String(val??'').trim();
    }
    if(row.some(c=>c&&String(c).trim()))sheetRows.push(Array.from({length:row.length},(_,i)=>row[i]??''));
   }
-  parseTableRows(sheetRows,result,path);
+  parseTableRows(sheetRows,result,sheetNames.get(path)||'',{date1904,year:importPeriod(fileName).year});
  }
  return result;
 }
@@ -504,7 +556,7 @@ export async function importDocumentFile(file){
  const name=String(file?.name||'documento');
  let parsed;
  if(/\.xlsx$/i.test(name)&&typeof file.arrayBuffer==='function'){
-  parsed=await parseXlsxBuffer(await file.arrayBuffer());
+  parsed=await parseXlsxBuffer(await file.arrayBuffer(),name);
  }else{
   let text='';
   if(typeof file.arrayBuffer==='function'){

@@ -1,5 +1,5 @@
 import { escapeHTML, money } from './finance.js';
-import { applyReviewedImport, planImport, undoReviewedImport } from './import-review.js';
+import { applyReviewedImport, monthLabel, planImport, undoReviewedImport } from './import-review.js';
 
 const e = escapeHTML;
 const labels = { transactions: 'Lançamento', debts: 'Dívida', goals: 'Objetivo', investments: 'Investimento' };
@@ -7,6 +7,7 @@ const statuses = { ready: 'Novo', possible: 'Possível duplicata', repeated: 'J�
 const destinationLabel = destination => destination === 'business' ? 'Negócio' : 'Pessoal';
 const dateLabel = date => typeof date === 'string' && Number.isFinite(Date.parse(date))
   ? new Intl.DateTimeFormat('pt-BR', { timeZone: 'UTC' }).format(new Date(date)) : '';
+const periodLabel = period => period === 'undated' ? 'Datas a revisar' : period === 'other' ? 'Registros sem data aplicável' : monthLabel(period);
 const batchFiles = batch => Array.isArray(batch.files) ? batch.files.join(', ') : 'Arquivo importado';
 const amountLabel = record => `${record.type === 'expense' ? '− ' : record.type === 'income' ? '+ ' : ''}${money(record.amount ?? record.total ?? record.target)}`;
 
@@ -23,18 +24,42 @@ export function createImportUI({ getData, dialog, modal, commit, onImported }) {
     review.options.account = fields.get('account');
     const plan = planImport(getData(), review.documents, review.options);
     review.plan = plan;
+    const periodSelect = form.querySelector('#import-period');
+    if (review.period !== 'all' && !plan.periods.has(review.period)) review.period = 'all';
+    const periods = [...plan.periods.keys()].sort((a, b) => a.localeCompare(b));
+    periodSelect.innerHTML = '<option value="all">Todos os períodos</option>' +
+      periods.map(period => `<option value="${period}">${e(periodLabel(period))} · ${plan.periods.get(period).count}</option>`).join('');
+    periodSelect.value = review.period;
+    const filtered = plan.rows.map((row, index) => ({ row, index }))
+      .filter(({ row }) => review.period === 'all' || row.period === review.period)
+      .sort((a, b) => a.row.period.localeCompare(b.row.period));
+    review.page = Math.max(0, Math.min(review.page, Math.ceil(filtered.length / pageSize) - 1));
     const start = review.page * pageSize;
-    const page = plan.rows.slice(start, start + pageSize);
+    const page = filtered.slice(start, start + pageSize);
     const unavailable = plan.counts.invalid + plan.counts.unsupported;
     const skipped = plan.counts.repeated + plan.counts.possible - plan.selected.filter(row => row.status === 'possible').length;
-    form.querySelector('#import-summary').textContent = `${plan.selected.length} para importar · ${skipped} repetidos ou suspeitos ignorados${unavailable ? ` · ${unavailable} indisponíveis neste destino` : ''}`;
+    const undated = plan.periods.get('undated')?.count ?? 0;
+    form.querySelector('#import-summary').textContent = `${plan.selected.length} para importar · ${skipped} duplicatas ignoradas${unavailable ? ` · ${unavailable} fora da importação` : ''}`;
+    form.querySelector('#import-date-note').hidden = !undated;
+    form.querySelector('#import-date-note').textContent = undated ? `${undated} registro${undated === 1 ? '' : 's'} com data a revisar. Informe a data correta para incluir na importação.` : '';
     form.querySelector('#import-business-note').hidden = plan.destination !== 'business';
-    form.querySelector('#import-rows').innerHTML = page.map((row, index) => {
-      const date = row.record.date || row.record.due || row.record.deadline;
-      const validDate = typeof date === 'string' && Number.isFinite(Date.parse(date));
-      return `<li class="import-row"><div class="import-row-name"><strong>${e(row.record.name || labels[row.collection])}</strong><small>${labels[row.collection]}${validDate ? ` · ${e(dateLabel(date))}` : ''} · ${e(row.fileName)}</small>${row.status === 'possible' ? `<label class="import-include"><input type="checkbox" data-import-choice="${start + index}" ${row.selected ? 'checked' : ''}>Incluir mesmo assim</label>` : ''}</div><div class="import-row-value"><strong class="money">${amountLabel(row.record)}</strong><span class="import-status ${row.status}">${statuses[row.status]}</span></div></li>`;
+    const currentTotals = review.period === 'all'
+      ? [...plan.periods.values()].reduce((totals, period) => ({ income: totals.income + period.income, expense: totals.expense + period.expense }), { income: 0, expense: 0 })
+      : plan.periods.get(review.period);
+    form.querySelector('#import-period-totals').innerHTML = `<span>Entradas <strong class="money">${money(currentTotals.income)}</strong></span><span>Saídas <strong class="money">${money(currentTotals.expense)}</strong></span>`;
+    form.querySelector('#import-rows').innerHTML = page.map(({ row, index }, pageIndex) => {
+      const date = row.dateField ? row.record[row.dateField] : '';
+      const dateText = dateLabel(date);
+      const previousPeriod = page[pageIndex - 1]?.row.period;
+      const group = review.period === 'all' && previousPeriod !== row.period
+        ? `<li class="import-month-heading">${e(periodLabel(row.period))}</li>` : '';
+      const editor = row.dateField && row.status !== 'repeated' && row.status !== 'unsupported' && !row.issue
+        ? `<details class="import-date-editor" ${row.needsDate ? 'open' : ''}><summary>${row.needsDate ? 'Informar data' : 'Corrigir data'}</summary><label class="field"><span class="visually-hidden">Data de ${e(row.record.name)}</span><input class="input" type="date" data-import-date="${index}" value="${e(date)}"></label></details>` : '';
+      const issue = row.issue || (row.needsDate ? row.sourceDate ? `Data no arquivo: ${row.sourceDate}` : 'Linha sem data no arquivo' : '');
+      const status = row.needsDate && row.status === 'invalid' ? 'Data a revisar' : statuses[row.status];
+      return `${group}<li class="import-row"><div class="import-row-name"><strong>${e(row.record.name || labels[row.collection])}</strong><small>${labels[row.collection]}${dateText ? ` · ${e(dateText)}` : ''} · ${e(row.fileName)}</small>${issue ? `<small>${e(issue)}</small>` : ''}${editor}${row.status === 'possible' ? `<label class="import-include"><input type="checkbox" data-import-choice="${index}" ${row.selected ? 'checked' : ''}>Incluir mesmo assim</label>` : ''}</div><div class="import-row-value"><strong class="money">${amountLabel(row.record)}</strong><span class="import-status ${row.status}">${status}</span></div></li>`;
     }).join('');
-    form.querySelector('#import-pages').innerHTML = plan.rows.length > pageSize ? `<button type="button" class="button secondary" data-import-page="-1" ${review.page === 0 ? 'disabled' : ''}>Anterior</button><span>${start + 1}–${Math.min(start + pageSize, plan.rows.length)} de ${plan.rows.length}</span><button type="button" class="button secondary" data-import-page="1" ${start + pageSize >= plan.rows.length ? 'disabled' : ''}>Próxima</button>` : '';
+    form.querySelector('#import-pages').innerHTML = filtered.length > pageSize ? `<button type="button" class="button secondary" data-import-page="-1" ${review.page === 0 ? 'disabled' : ''}>Anterior</button><span>${start + 1}–${Math.min(start + pageSize, filtered.length)} de ${filtered.length}</span><button type="button" class="button secondary" data-import-page="1" ${start + pageSize >= filtered.length ? 'disabled' : ''}>Próxima</button>` : '';
     form.querySelector('[type="submit"]').disabled = !plan.selected.length;
     form.querySelector('[type="submit"]').textContent = plan.selected.length ? `Importar ${plan.selected.length} registro${plan.selected.length === 1 ? '' : 's'}` : 'Nenhum registro novo';
   }
@@ -42,8 +67,8 @@ export function createImportUI({ getData, dialog, modal, commit, onImported }) {
   function open(documents, destination = 'personal') {
     if (documents.reduce((count, document) => count + document.rows.length, 0) > 5000) throw new Error('Divida a importação em lotes de até 5.000 registros.');
     if (!documents.some(document => document.rows.length)) throw new Error('Não encontrei registros no arquivo. Confira as colunas de descrição, data e valor.');
-    review = { documents, original: getData(), options: { destination, account: '', include: new Set() }, page: 0 };
-    modal('Revisar importação', `<div class="import-review"><p class="form-note">Confira o destino e os registros antes de salvar. Possíveis duplicatas ficam de fora por padrão.</p><div class="form-grid import-fields"><label class="field">Destino<select name="destination" data-import-setting><option value="personal" ${destination === 'personal' ? 'selected' : ''}>Pessoal</option><option value="business" ${destination === 'business' ? 'selected' : ''}>Negócio</option></select></label><label class="field">Conta de origem (opcional)<input class="input" name="account" data-import-setting maxlength="60" placeholder="Ex.: Conta PJ ou carteira" autocomplete="off"></label></div><p id="import-business-note" class="form-note" hidden>Entradas do extrato atualizam o caixa. Marque as vendas em Meu negócio para incluí-las no faturamento.</p><p class="import-summary" id="import-summary" aria-live="polite"></p><ul id="import-rows" class="import-rows"></ul><div id="import-pages" class="import-pages"></div><button class="button ghost" type="button" data-import-history>Ver histórico</button></div>`, 'import-review-form', 'Importar registros');
+    review = { documents, original: getData(), options: { destination, account: '', include: new Set(), dates: new Map() }, page: 0, period: 'all' };
+    modal('Revisar importação', `<div class="import-review"><p class="form-note">Confira o destino e os registros antes de salvar. Possíveis duplicatas ficam de fora por padrão. O filtro de mês muda só a prévia.</p><div class="form-grid import-fields"><label class="field">Destino<select name="destination" data-import-setting><option value="personal" ${destination === 'personal' ? 'selected' : ''}>Pessoal</option><option value="business" ${destination === 'business' ? 'selected' : ''}>Negócio</option></select></label><label class="field">Conta de origem (opcional)<input class="input" name="account" data-import-setting maxlength="60" placeholder="Ex.: Conta PJ ou carteira" autocomplete="off"></label></div><div class="import-period"><label class="field">Ver lançamentos por mês<select id="import-period" data-import-period></select></label><div id="import-period-totals" class="import-period-totals"></div></div><p id="import-date-note" class="form-note" hidden></p><p id="import-business-note" class="form-note" hidden>Entradas do extrato atualizam o caixa. Marque as vendas em Meu negócio para incluí-las no faturamento.</p><p class="import-summary" id="import-summary" aria-live="polite"></p><ul id="import-rows" class="import-rows"></ul><div id="import-pages" class="import-pages"></div><button class="button ghost" type="button" data-import-history>Ver histórico</button></div>`, 'import-review-form', 'Importar registros');
     updatePreview();
   }
 
@@ -81,6 +106,27 @@ export function createImportUI({ getData, dialog, modal, commit, onImported }) {
       review.options.include.clear();
       review.page = 0;
       updatePreview();
+    }
+    if (input.hasAttribute('data-import-period')) {
+      review.period = input.value;
+      review.page = 0;
+      updatePreview();
+      dialog.querySelector('#import-rows')?.scrollTo({ top: 0 });
+    }
+    if (input.hasAttribute('data-import-date')) {
+      const index = Number(input.dataset.importDate);
+      const row = review.plan.rows[index];
+      if (row?.dateField && row.status !== 'repeated' && row.status !== 'unsupported') {
+        if (input.value) review.options.dates.set(row.key, input.value);
+        else review.options.dates.delete(row.key);
+        review.options.include.delete(row.key);
+        updatePreview();
+        const editor = dialog.querySelector(`[data-import-date="${index}"]`);
+        if (editor) {
+          editor.closest('details').open = true;
+          editor.focus({ preventScroll: true });
+        }
+      }
     }
     if (input.hasAttribute('data-import-choice')) {
       const row = review.plan.rows[Number(input.dataset.importChoice)];

@@ -1,5 +1,6 @@
 import { importDocumentFile, parseDocumentContent } from './finance.js';
 import { ensureBusiness } from './business.js';
+import { validImportDate } from './import-dates.js';
 
 const collections = ['transactions', 'debts', 'goals', 'investments'];
 const maxFileBytes = 5 * 1024 * 1024;
@@ -17,11 +18,11 @@ async function prepareDocument(parsed, bytes, name) {
   const rows = [];
   for (const collection of collections) {
     for (const [index, item] of parsed[collection].entries()) {
-      const { ofx_reference: reference, ...record } = item;
+      const { ofx_reference: reference, import_date_raw: sourceDate, import_issue: issue, ...record } = item;
       const bankKey = reference && parsed.ofx_account
         ? await digest(textBytes(JSON.stringify([parsed.ofx_account, reference])))
         : '';
-      rows.push({ collection, record, key: `${source}:${collection}:${index}`, bankKey });
+      rows.push({ collection, record, key: `${source}:${collection}:${index}`, bankKey, sourceDate, issue });
     }
   }
   return { name: String(name).slice(0, 100), rows };
@@ -57,10 +58,11 @@ function matchKey(collection, item) {
   return JSON.stringify([collection, name, ...details[collection]]);
 }
 
-function validDate(value) {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const date = new Date(`${value}T00:00:00Z`);
-  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+const dateFields = { transactions: 'date', debts: 'due', goals: 'deadline' };
+
+export function monthLabel(period) {
+  return new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+    .format(new Date(`${period}-01T00:00:00Z`));
 }
 
 function validAmount(value, allowZero = false) {
@@ -69,9 +71,9 @@ function validAmount(value, allowZero = false) {
 
 function isValid({ collection, record }) {
   if (!normalize(record.name)) return false;
-  if (collection === 'transactions') return ['income', 'expense'].includes(record.type) && validDate(record.date) && validAmount(record.amount);
-  if (collection === 'debts') return validAmount(record.total) && validAmount(record.balance, true) && record.balance <= record.total && validDate(record.due);
-  if (collection === 'goals') return validAmount(record.target) && validAmount(record.saved, true) && record.saved <= record.target && (!record.deadline || validDate(record.deadline));
+  if (collection === 'transactions') return ['income', 'expense'].includes(record.type) && validImportDate(record.date) && validAmount(record.amount);
+  if (collection === 'debts') return validAmount(record.total) && validAmount(record.balance, true) && record.balance <= record.total && validImportDate(record.due);
+  if (collection === 'goals') return validAmount(record.target) && validAmount(record.saved, true) && record.saved <= record.target && (!record.deadline || validImportDate(record.deadline));
   return validAmount(record.amount);
 }
 
@@ -81,7 +83,7 @@ function increment(map, key) {
   return count;
 }
 
-export function planImport(state, documents, { destination = 'personal', account = '', include = new Set() } = {}) {
+export function planImport(state, documents, { destination = 'personal', account = '', include = new Set(), dates = new Map() } = {}) {
   const scope = normalize(account);
   const existing = existingRows(state, destination);
   const knownKeys = new Set(existing.map(({ record }) => record.import_source).filter(Boolean));
@@ -95,11 +97,18 @@ export function planImport(state, documents, { destination = 'personal', account
   const counts = { ready: 0, possible: 0, repeated: 0, invalid: 0, unsupported: 0 };
   for (const document of documents) {
     const occurrences = new Map();
-    for (const row of document.rows) {
+    for (const original of document.rows) {
+      const dateField = dateFields[original.collection];
+      const override = dates.get(original.key);
+      const corrected = dateField && validImportDate(override);
+      const row = corrected ? { ...original, record: { ...original.record, [dateField]: override } } : original;
+      const date = dateField && row.record[dateField];
+      const needsDate = dateField && !validImportDate(date) && (row.collection !== 'goals' || Boolean(row.sourceDate));
+      const period = needsDate ? 'undated' : validImportDate(date) ? date.slice(0, 7) : 'other';
       let status;
       if (destination === 'business' && row.collection !== 'transactions') {
         status = 'unsupported';
-      } else if (!isValid(row)) {
+      } else if (needsDate || row.issue || !isValid(row)) {
         status = 'invalid';
       } else {
         const signature = matchKey(row.collection, row.record);
@@ -113,13 +122,24 @@ export function planImport(state, documents, { destination = 'personal', account
         if (row.bankKey) bankKeys.add(row.bankKey);
       }
       counts[status]++;
-      rows.push({ ...row, fileName: document.name, status, selected: status === 'ready' || (status === 'possible' && include.has(row.key)) });
+      rows.push({ ...row, fileName: document.name, status, period, dateField, needsDate, selected: status === 'ready' || (status === 'possible' && include.has(row.key)) });
     }
     for (const [signature, count] of occurrences) {
       previousCounts.set(signature, Math.max(count, previousCounts.get(signature) ?? 0));
     }
   }
-  return { destination, account: String(account).trim().slice(0, 60), rows, counts, selected: rows.filter(row => row.selected) };
+  const selected = rows.filter(row => row.selected);
+  const periods = new Map();
+  for (const row of rows) {
+    const totals = periods.get(row.period) ?? { count: 0, selected: 0, income: 0, expense: 0 };
+    totals.count++;
+    if (row.selected) {
+      totals.selected++;
+      if (row.collection === 'transactions') totals[row.record.type] += row.record.amount;
+    }
+    periods.set(row.period, totals);
+  }
+  return { destination, account: String(account).trim().slice(0, 60), rows, counts, selected, periods };
 }
 
 function sortKeys(value) {
