@@ -130,7 +130,40 @@ export function sampleData(){
 }
 export function totals(state,month){const list=state.transactions.filter(t=>t.date.startsWith(month));const sum=(items,type)=>items.filter(t=>t.type===type).reduce((a,t)=>a+t.amount,0);const debtInterest=state.debts.reduce((a,d)=>a+debtMetrics(d).interest,0);return {income:sum(list,'income'),expense:sum(list,'expense'),balance:state.profile.opening_balance+sum(state.transactions,'income')-sum(state.transactions,'expense'),saved:state.goals.reduce((a,g)=>a+g.saved,0),debt:state.debts.reduce((a,d)=>a+d.balance,0),debtInterest,invested:state.investments.reduce((a,i)=>a+i.amount,0),list};}
 export function projection(initial,monthly,annual,years){const rate=Math.pow(1+annual/100,1/12)-1;const months=Math.round(years*12);let total=initial;const points=[total];for(let n=1;n<=months;n++){total=total*(1+rate)+monthly;if(n%12===0)points.push(total);}return {total:Math.round(total),contributed:initial+monthly*months,points};}
-export function budgetBreakdown(state,month){const list=state.transactions.filter(t=>t.type==='expense'&&t.date.startsWith(month));const sums={};for(const t of list)sums[t.category]=(sums[t.category]||0)+t.amount;return Object.entries(sums).sort((a,b)=>b[1]-a[1]);}
+function expenseBreakdown(transactions,inPeriod){
+ const sums=new Map();
+ for(const transaction of transactions){
+  if(transaction.type!=='expense'||!inPeriod(transaction.date))continue;
+  const category=transaction.category||'Outros';
+  sums.set(category,(sums.get(category)||0)+transaction.amount);
+ }
+ return [...sums].sort((a,b)=>b[1]-a[1]);
+}
+export function budgetBreakdown(state,month){return expenseBreakdown(state.transactions,date=>date.startsWith(month));}
+
+export const spendingPeriods={week:'Semana',month:'Mês',quarter:'Trimestre',semester:'Semestre',year:'Ano'};
+export function spendingReport(state,period,anchor=dateISO()){
+ const start=new Date(`${anchor}T12:00:00`);
+ const next=new Date(start);
+ if(period==='week'){
+  // Use calendar days so a change of time zone offset cannot shift the boundary.
+  start.setDate(start.getDate()-(start.getDay()+6)%7);
+  next.setTime(start.getTime());
+  next.setDate(start.getDate()+7);
+ }else{
+  const months={quarter:3,semester:6,year:12}[period]||1;
+  start.setMonth(Math.floor(start.getMonth()/months)*months,1);
+  next.setTime(start.getTime());
+  next.setMonth(start.getMonth()+months);
+ }
+ const end=new Date(next);
+ end.setDate(end.getDate()-1);
+ const previous=new Date(start);
+ previous.setDate(previous.getDate()-1);
+ const from=dateISO(start),until=dateISO(next);
+ const rows=expenseBreakdown(state.transactions,date=>date>=from&&date<until);
+ return {from,to:dateISO(end),previous:dateISO(previous),next:until,rows,total:rows.reduce((sum,[,amount])=>sum+amount,0)};
+}
 export function localAnswer(question,state,month){
  const q=String(question||'').toLowerCase().trim();
  const t=totals(state,month),byCat=budgetBreakdown(state,month),top=byCat[0];

@@ -16,6 +16,6 @@ Validação realizada em 05/11/2026 no Supabase real da Alva, sem upgrade de pla
 
 Revisão visual: login/cadastro, navegação pessoal e Meu negócio em tamanhos mobile e desktop. Respeito à preferência de movimento reduzido observado; aparelhos físicos não foram testados.
 
-Limites: o e-mail não tem propriedade verificada por escolha do proprietário; recuperação automática ainda depende de SMTP e implementação da rota. CAPTCHA e verificação de senhas vazadas não estão configurados. Tokens ficam acessíveis ao JavaScript em sessionStorage; as proteções de XSS/CSP reduzem risco e não o eliminam. Não houve auditoria independente, pentest ou teste de carga. A IA externa não está ativada.
+Limites: o e-mail não tem propriedade verificada por escolha do proprietário; recuperação automática ainda depende de SMTP e implementação da rota. CAPTCHA e verificação de senhas vazadas não estão configurados. Tokens ficam acessíveis ao JavaScript no armazenamento persistente do navegador (localStorage); as proteções de XSS/CSP reduzem risco e não o eliminam. Não houve auditoria independente, pentest ou teste de carga. A IA externa não está ativada.
 
 O relatório descreve os testes executados, não uma garantia de segurança absoluta.

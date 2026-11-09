@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {emptyData,cents,totals,projection,budgetBreakdown,escapeHTML,parseDocumentContent,applyImportedData,tryChatCommand,debtMetrics,evaluateSpendingLimits,formatLimitAlertMessage,formatGoalCoachingPlan} from '../dist/finance.js';
+import {emptyData,cents,totals,projection,budgetBreakdown,spendingReport,escapeHTML,parseDocumentContent,applyImportedData,tryChatCommand,debtMetrics,evaluateSpendingLimits,formatLimitAlertMessage,formatGoalCoachingPlan} from '../dist/finance.js';
 test('interpreta valores brasileiros e rejeita valores inválidos',()=>{assert.equal(cents('1.234,56'),123456);assert.equal(cents('1234.56'),123456);assert.equal(cents('12,90'),1290);for(const value of ['abc','-1','0','Infinity'])assert.throws(()=>cents(value));});
 test('saldo é global e resumo mensal respeita o mês',()=>{const s=emptyData('Teste');s.profile.opening_balance=10000;s.transactions=[{type:'income',amount:5000,date:'2026-10-01'},{type:'expense',amount:3000,date:'2026-11-02',category:'Alimentação'},{type:'income',amount:9000,date:'2026-11-03'}];const t=totals(s,'2026-11');assert.equal(t.balance,21000);assert.equal(t.income,9000);assert.equal(t.expense,3000);assert.deepEqual(budgetBreakdown(s,'2026-11'),[['Alimentação',3000]]);});
 test('simulação com taxa zero preserva capital mais aportes',()=>{const p=projection(100000,30000,0,5);assert.equal(p.total,1900000);assert.equal(p.contributed,1900000);assert.equal(p.points.length,6);});
@@ -108,4 +108,28 @@ test('excluir objetivo por comando de chat e montagem de plano de perguntas pela
  assert.ok(plan.includes('De onde virá o dinheiro'));
  assert.ok(plan.includes('Pague-se Primeiro'));
  assert.ok(plan.toLowerCase().includes('primeiro passo'));
+});
+
+test('ranking soma só despesas dentro dos limites da semana e dos períodos do calendário',()=>{
+ const state=emptyData();
+ state.transactions=[
+  {type:'expense',category:'Moradia',amount:90000,date:'2024-12-31'},
+  {type:'expense',category:'Moradia',amount:40000,date:'2025-01-01'},
+  {type:'expense',category:'Transporte',amount:5000,date:'2025-03-30'},
+  {type:'expense',category:'Alimentação',amount:6000,date:'2025-03-31'},
+  {type:'expense',category:'Alimentação',amount:4000,date:'2025-04-06'},
+  {type:'income',category:'Alimentação',amount:99000,date:'2025-04-06'},
+  {type:'expense',category:'Compras',amount:8000,date:'2025-04-07'},
+  {type:'expense',category:'Lazer',amount:2500,date:'2025-07-01'},
+ ];
+ const week=spendingReport(state,'week','2025-04-03');
+ assert.equal(week.from,'2025-03-31');
+ assert.equal(week.to,'2025-04-06');
+ assert.equal(week.previous,'2025-03-30');
+ assert.equal(week.next,'2025-04-07');
+ assert.deepEqual(week.rows,[['Alimentação',10000]]);
+ assert.deepEqual(spendingReport(state,'month','2025-04-30').rows,[['Compras',8000],['Alimentação',4000]]);
+ assert.equal(spendingReport(state,'quarter','2025-03-31').total,51000);
+ assert.equal(spendingReport(state,'semester','2025-04-30').total,63000);
+ assert.equal(spendingReport(state,'year','2025-07-01').total,65500);
 });
