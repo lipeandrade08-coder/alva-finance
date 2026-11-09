@@ -60,11 +60,111 @@ function buildSmartAnswer(question:string,state:Record<string,any>):string{
   return `Resumo atual da sua conta:\n• Saldo disponível: ${money(totalBalance)}\n• Mês atual (${month}): ${money(income)} de entradas e ${money(expense)} de saídas${top?` (maior gasto: ${top[0]} com ${money(top[1])})`:''}\n• Objetivos: ${money(totalSaved)} guardados | Dívidas: ${money(totalDebt)} | Investimentos: ${money(totalInvested)}\n\nComo posso agir por você agora:\n• Registrar pelo chat: "Gastei 85 no mercado", "Recebi 2500 de salário", "Dívida cartão 1200 em 6x", "Criar meta Viagem de 5000"\n• Importar arquivos: clique no botão Anexar aqui no chat ou no topo do painel para enviar sua planilha (.xlsx, .csv, .ofx).`;
 }
 
+type AlertLimit = { id: string; name: string; category?: string; scope?: string; limit: number; channel?: string };
+type AlertTransaction = { type?: string; amount?: number; date?: string; name?: string; category?: string };
+const limitCategories = new Set(['alimentacao','moradia','transporte','saude','lazer','compras','educacao','assinaturas','dividas','metas','investimentos','salario','freelance','outros']);
+const comparable = (value: unknown) => String(value ?? '').normalize('NFD').replace(/\p{M}/gu, '').trim().toLowerCase();
+
+function alertSpend(limit: AlertLimit, transactions: AlertTransaction[], month: string) {
+  const name = comparable(limit.name);
+  const category = comparable(limit.category);
+  return transactions.reduce((sum, transaction) => {
+    if (transaction?.type !== 'expense' || typeof transaction.date !== 'string' || !transaction.date.startsWith(month)) return sum;
+    if (!Number.isSafeInteger(transaction.amount) || transaction.amount! <= 0) return sum;
+    const matchesName = Boolean(name && comparable(transaction.name).includes(name));
+    const transactionCategory = comparable(transaction.category);
+    if (limit.scope === 'category' || limitCategories.has(name)) {
+      const matchesCategory = Boolean(transactionCategory && (transactionCategory === name || transactionCategory === category));
+      return sum + (matchesCategory || matchesName ? transaction.amount! : 0);
+    }
+    return sum + (matchesName ? transaction.amount! : 0);
+  }, 0);
+}
+
+async function claimRequest(url: string, authHeaders: Record<string, string>) {
+  const response = await fetch(`${url}/rest/v1/rpc/claim_agent_request`, {
+    method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+    body: '{}', signal: AbortSignal.timeout(10000)
+  });
+  if (!response.ok) return 503;
+  const allowed = await response.json();
+  return allowed === true ? 200 : allowed === false ? 429 : 503;
+}
+
+const normalizeEmail = (value: unknown) => typeof value === 'string' ? value.trim().toLowerCase() : '';
+function normalizePhone(value: unknown) {
+  if (typeof value !== 'string') return '';
+  const digits = value.replace(/\D/g, '');
+  if (/^55\d{10,11}$/.test(digits)) return `+${digits}`;
+  return /^\d{10,11}$/.test(digits) ? `+55${digits}` : '';
+}
+
+function verifiedAlertDestinations(user: Record<string, any>, profile: Record<string, any>) {
+  // Apenas o servidor pode atestar a confirmação e o aceite do destinatário.
+  const verified = user.app_metadata?.alva_verified_alerts;
+  const email = normalizeEmail(verified?.email);
+  const phone = normalizePhone(verified?.whatsapp);
+  return {
+    email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email === normalizeEmail(profile.alert_email || user.email) ? email : '',
+    whatsapp: phone && phone === normalizePhone(profile.alert_whatsapp) ? phone : ''
+  };
+}
+
+async function dispatchAlert(url: string, authHeaders: Record<string, string>, user: Record<string, any>, state: Record<string, any>, limitId: string) {
+  const sent = { email: false, whatsapp: false };
+  const limit: AlertLimit | undefined = Array.isArray(state.spending_limits)
+    ? state.spending_limits.find((item: AlertLimit) => item?.id === limitId)
+    : undefined;
+  if (!limit || typeof limit.name !== 'string' || !limit.name.trim() || !Number.isSafeInteger(limit.limit) || limit.limit <= 0) {
+    return { status: 404, body: { error: 'Limite de gastos não encontrado.' } };
+  }
+  const month = new Intl.DateTimeFormat('sv-SE', { year: 'numeric', month: '2-digit', timeZone: 'America/Sao_Paulo' }).format(new Date());
+  const spent = alertSpend(limit, Array.isArray(state.transactions) ? state.transactions : [], month);
+  if (spent < limit.limit * 0.8) return { status: 200, body: { sent } };
+  const channel = limit.channel || state.profile?.alert_channel || 'both';
+  const destination = verifiedAlertDestinations(user, state.profile ?? {});
+  const resendKey = Deno.env.get('RESEND_API_KEY');
+  const sender = Deno.env.get('ALVA_ALERT_FROM');
+  const webhook = Deno.env.get('WHATSAPP_WEBHOOK_URL');
+  const emailEnabled = (channel === 'email' || channel === 'both') && destination.email && resendKey && sender;
+  const whatsappEnabled = (channel === 'whatsapp' || channel === 'both') && destination.whatsapp && webhook?.startsWith('https://');
+  if (!emailEnabled && !whatsappEnabled) return { status: 200, body: { sent, reason: 'no_verified_destination' } };
+
+  const quota = await claimRequest(url, authHeaders);
+  if (quota !== 200) return { status: quota, body: { error: 'Envio de avisos temporariamente indisponível.' } };
+  const name = limit.name.replace(/[\r\n]/g, ' ').slice(0, 80);
+  const text = `Alva · ${name}: ${money(spent)} de ${money(limit.limit)} em ${month}. Abra a Alva para revisar seus lançamentos.`;
+  const level = spent >= limit.limit ? 'reached' : 'warning';
+  const idempotencyKey = `alva-alert/${user.id}/${limit.id}/${month}/${level}`;
+  if (emailEnabled) {
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST', signal: AbortSignal.timeout(8000),
+        headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify({ from: sender, to: [destination.email], subject: `Aviso da Alva · ${name}`, text })
+      });
+      sent.email = response.ok;
+    } catch { /* O painel continua disponível quando o provedor falha. */ }
+  }
+  if (whatsappEnabled) {
+    try {
+      const webhookToken = Deno.env.get('ALVA_WHATSAPP_WEBHOOK_TOKEN');
+      const response = await fetch(webhook!, {
+        method: 'POST', signal: AbortSignal.timeout(8000),
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey, ...(webhookToken ? { Authorization: `Bearer ${webhookToken}` } : {}) },
+        body: JSON.stringify({ phone: destination.whatsapp.slice(1), message: text, idempotency_key: idempotencyKey })
+      });
+      sent.whatsapp = response.ok;
+    } catch { /* O painel continua disponível quando o provedor falha. */ }
+  }
+  return { status: 200, body: { sent } };
+}
+
 Deno.serve(async(req:Request)=>{
   const envOrigin=Deno.env.get('ALVA_ALLOWED_ORIGIN')||'';
   envOrigin.split(',').map(s=>s.trim()).filter(Boolean).forEach(o=>ALLOWED_ORIGINS.add(o));
   const origin=req.headers.get('origin')||'';
-  const allowOrigin=ALLOWED_ORIGINS.has(origin)||origin.endsWith('.vercel.app')?origin:'https://alva-finance.vercel.app';
+  const allowOrigin=ALLOWED_ORIGINS.has(origin)?origin:'https://alva-finance.vercel.app';
   const headers=headersFor(allowOrigin);
   const respond=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers});
   if(req.method==='OPTIONS')return new Response(null,{status:204,headers});
@@ -77,48 +177,20 @@ Deno.serve(async(req:Request)=>{
   const model=Deno.env.get('OPENAI_MODEL')||'gpt-4o-mini';
   try{
     const authHeaders={apikey:key,Authorization:authorization};
+    const userResponse=await fetch(`${url}/auth/v1/user`,{headers:authHeaders,signal:AbortSignal.timeout(10000)});
+    if(!userResponse.ok)return respond({error:'Sessão inválida ou expirada.'},401);
+    const user=await userResponse.json();
+    if(!user?.id)return respond({error:'Sessão inválida ou expirada.'},401);
     const bodyText=await req.text();
     if(bodyText.length>40000)return respond({error:'Mensagem muito grande.'},413);
     let body;try{body=JSON.parse(bodyText);}catch{return respond({error:'JSON inválido.'},400);}
-    const userResponse=await fetch(`${url}/auth/v1/user`,{headers:authHeaders,signal:AbortSignal.timeout(10000)});
-    const user=userResponse.ok?await userResponse.json():null;
-    if(body.action==='send_alert'&&body.alert){
-      const alert=body.alert;
-      const resendKey=Deno.env.get('RESEND_API_KEY');
-      const waWebhook=Deno.env.get('WHATSAPP_WEBHOOK_URL');
-      const callmebotKey=Deno.env.get('CALLMEBOT_APIKEY');
-      const sent:{email?:boolean;whatsapp?:boolean}={};
-      const emailTo=String(alert.email||user?.email||'').trim();
-      const phone=String(alert.whatsapp||'').replace(/\D/g,'');
-      const textMsg=String(alert.text||'Alerta de limite de gastos atingido na Alva Finance.');
-      const subject=`⚠️ Alerta Alva: Limite de ${alert.name||'gastos'} (${alert.pct||100}%)`;
-      if(emailTo&&(alert.channel==='email'||alert.channel==='both')){
-        if(resendKey){
-          try{
-            const r=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${resendKey}`,'Content-Type':'application/json'},body:JSON.stringify({from:Deno.env.get('ALVA_ALERT_FROM')||'Alva Finance <alertas@alvafinance.app>',to:[emailTo],subject,text:textMsg.replace(/\*/g,'')})});
-            sent.email=r.ok;
-          }catch{}
-        }
-        if(!sent.email){
-          try{
-            const r=await fetch(`https://formsubmit.co/ajax/${encodeURIComponent(emailTo)}`,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json',Origin:'https://alva-finance.vercel.app',Referer:'https://alva-finance.vercel.app/'},body:JSON.stringify({_subject:subject,_template:'box',Alerta:alert.name||'Limite de gastos',Status:`${alert.pct||100}% do limite atingido`,Mensagem:textMsg.replace(/\*/g,'')})});
-            sent.email=r.ok;
-          }catch{}
-        }
-      }
-      if(phone&&(alert.channel==='whatsapp'||alert.channel==='both')){
-        const fullPhone=phone.startsWith('55')?phone:`55${phone}`;
-        if(waWebhook){
-          try{const r=await fetch(waWebhook,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:fullPhone,message:textMsg,alert})});sent.whatsapp=r.ok;}catch{}
-        }else if(callmebotKey){
-          try{const r=await fetch(`https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(fullPhone)}&text=${encodeURIComponent(textMsg)}&apikey=${encodeURIComponent(callmebotKey)}`);sent.whatsapp=r.ok;}catch{}
-        }
-      }
-      return respond({ok:true,sent});
-    }
-    if(!user)return respond({error:'Sessão inválida ou expirada.'},401);
+    if(!body||typeof body!=='object'||Array.isArray(body))return respond({error:'JSON inválido.'},400);
+    const alertRequest=body.action==='send_alert';
+    if(alertRequest&&(typeof body.limit_id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.limit_id)))return respond({error:'Informe um limite de gastos válido.'},400);
     if(body.action==='transcribe_audio'&&typeof body.audio==='string'){
       if(!apiKey)return respond({error:'Transcrição em nuvem requer OPENAI_API_KEY ou uso do microfone do navegador.'},400);
+      const quota=await claimRequest(url,authHeaders);
+      if(quota!==200)return respond({error:'Transcrição temporariamente indisponível.'},quota);
       const binStr=atob(body.audio.replace(/^data:[^;]+;base64,/,''));
       const bytes=new Uint8Array(binStr.length);
       for(let i=0;i<binStr.length;i++)bytes[i]=binStr.charCodeAt(i);
@@ -131,16 +203,20 @@ Deno.serve(async(req:Request)=>{
       const tj=await tr.json();
       return respond({text:String(tj.text||'').trim()});
     }
-    if(typeof body.message!=='string'||!body.message.trim()||body.message.length>2000)return respond({error:'Envie uma mensagem de até 2.000 caracteres.'},400);
+    if(!alertRequest&&(typeof body.message!=='string'||!body.message.trim()||body.message.length>2000))return respond({error:'Envie uma mensagem de até 2.000 caracteres.'},400);
     const dataResponse=await fetch(`${url}/rest/v1/finance_data?user_id=eq.${user.id}&select=data`,{headers:authHeaders,signal:AbortSignal.timeout(10000)});
     if(!dataResponse.ok)return respond({error:'Não foi possível ler os dados financeiros.'},502);
     const rows=await dataResponse.json();const state=rows[0]?.data;
     if(!state)return respond({error:'Conta financeira não encontrada.'},404);
+    if(alertRequest){
+      const result=await dispatchAlert(url,authHeaders,user,state,body.limit_id);
+      return respond(result.body,result.status);
+    }
     if(!apiKey){
       return respond({answer:buildSmartAnswer(body.message,state)});
     }
-    const quota=await fetch(`${url}/rest/v1/rpc/claim_agent_request`,{method:'POST',headers:{...authHeaders,'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(10000)});
-    if(quota.ok&&(await quota.json())===false)return respond({error:'Limite de conversas atingido. Tente mais tarde.'},429);
+    const quota=await claimRequest(url,authHeaders);
+    if(quota!==200)return respond({error:'Conversa temporariamente indisponível.'},quota);
     const context={profile:state.profile,transactions:(state.transactions||[]).slice(-100),goals:(state.goals||[]).slice(0,20),debts:(state.debts||[]).slice(0,20),investments:(state.investments||[]).slice(0,20),business:state.business?{profile:state.business.profile,records:(state.business.records||[]).slice(-100),taxes:(state.business.taxes||[]).slice(-30)}:null};
     const history=Array.isArray(body.history)?body.history.slice(-8).filter((m:Record<string,unknown>)=>['user','assistant'].includes(String(m.role))&&typeof m.content==='string').map((m:{role:string;content:string})=>({role:m.role,content:m.content.slice(0,4000)})):[];
     const response=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json'},signal:AbortSignal.timeout(45000),body:JSON.stringify({model,store:false,max_output_tokens:1200,

@@ -392,12 +392,17 @@ export function parseDocumentContent(text,fileName=''){
   }catch{}
  }
  if(/<STMTTRN>/i.test(raw)){
+  const field=tag=>raw.match(new RegExp(`<${tag}>([^<\r\n]+)`, 'i'))?.[1]?.trim()||'';
+  const bank=field('BANKID')||field('ORG'),account=field('ACCTID');
+  const accountIds=new Set([...raw.matchAll(/<ACCTID>([^<\r\n]+)/gi)].map(match=>match[1].trim()));
+  if(bank&&account&&accountIds.size===1)result.ofx_account=JSON.stringify([bank,field('BRANCHID'),account]);
   const blocks=raw.split(/<STMTTRN>/i).slice(1);
   for(const b of blocks){
    const amtMatch=b.match(/<TRNAMT>([^\r\n<]+)/i),dtMatch=b.match(/<DTPOSTED>([^\r\n<]+)/i),memoMatch=b.match(/<(?:MEMO|NAME)>([^\r\n<]+)/i);
    const signed=parseFlexAmount(amtMatch?.[1]);if(!signed)continue;
    const type=signed<0?'expense':'income',amount=Math.abs(signed),name=String(memoMatch?.[1]||'Movimentação bancária').trim().slice(0,100);
-   result.transactions.push({id:crypto.randomUUID(),name,amount,type,category:inferCategory(name,type),date:parseFlexDate(dtMatch?.[1])});
+   const reference=b.match(/<FITID>([^\r\n<]+)/i)?.[1]?.trim();
+   result.transactions.push({id:crypto.randomUUID(),name,amount,type,category:inferCategory(name,type),date:parseFlexDate(dtMatch?.[1]),...(reference?{ofx_reference:reference.slice(0,200)}:{})});
   }
   return result;
  }
@@ -415,20 +420,38 @@ export async function parseXlsxBuffer(buffer){
  for(let i=bytes.length-22;i>=Math.max(0,bytes.length-65557);i--){if(view.getUint32(i,true)===0x06054b50){eocd=i;break;}}
  if(eocd<0)throw new Error('Arquivo Excel (.xlsx) inválido.');
  const cdCount=view.getUint16(eocd+10,true),cdOffset=view.getUint32(eocd+16,true);
- let pos=cdOffset;const dec=new TextDecoder();
+ let pos=cdOffset, expanded=0;const dec=new TextDecoder();
+ const maxExpanded=24*1024*1024;
  for(let i=0;i<cdCount&&pos+46<=bytes.length;i++){
   if(view.getUint32(pos,true)!==0x02014b50)break;
   const method=view.getUint16(pos+10,true),compSize=view.getUint32(pos+20,true),nameLen=view.getUint16(pos+28,true),extraLen=view.getUint16(pos+30,true),commentLen=view.getUint16(pos+32,true),localOffset=view.getUint32(pos+42,true);
   const name=dec.decode(bytes.subarray(pos+46,pos+46+nameLen));
   pos+=46+nameLen+extraLen+commentLen;
   if(!/^xl\/(sharedStrings\.xml|styles\.xml|workbook\.xml|worksheets\/sheet\d+\.xml)$/.test(name))continue;
+  if(localOffset+30>bytes.length)throw new Error('Planilha Excel inválida.');
   const lNameLen=view.getUint16(localOffset+26,true),lExtraLen=view.getUint16(localOffset+28,true),dataStart=localOffset+30+lNameLen+lExtraLen;
+  if(dataStart+compSize>bytes.length)throw new Error('Planilha Excel inválida.');
   const slice=bytes.subarray(dataStart,dataStart+compSize);
-  if(method===0)files[name]=dec.decode(slice);
-  else if(method===8&&typeof DecompressionStream==='function'){
-   const ds=new DecompressionStream('deflate-raw');const w=ds.writable.getWriter();w.write(slice);w.close();
-   const buf=await new Response(ds.readable).arrayBuffer();files[name]=dec.decode(buf);
+  if(method===0){
+   expanded+=slice.length;
+   if(expanded>maxExpanded)throw new Error('Planilha Excel muito grande após descompactar.');
+   files[name]=dec.decode(slice);
+  }else if(method===8&&typeof DecompressionStream==='function'){
+   const reader=new Blob([slice]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
+   const decoder=new TextDecoder();
+   let xml='';
+   try{
+    while(true){
+     const {value,done}=await reader.read();
+     if(done)break;
+     expanded+=value.length;
+     if(expanded>maxExpanded)throw new Error('Planilha Excel muito grande após descompactar.');
+     xml+=decoder.decode(value,{stream:true});
+    }
+    files[name]=xml+decoder.decode();
+   }finally{await reader.cancel().catch(()=>{});}
   }
+
  }
  const unescapeXML=s=>s.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;|&apos;/g,"'").replace(/&amp;/g,'&');
  const shared=[];

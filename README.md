@@ -61,6 +61,16 @@ Meu negócio atende MEIs, microempresas e autônomos: perfil, caixa, vendas, cli
 
 A IA conversacional ainda precisa de provedor e segredo no servidor. O sistema oferece análise automática dos registros enquanto isso. O simulador usa uma taxa hipotética, sem garantia de retorno, impostos, taxas ou inflação. Nenhuma ação financeira é executada pela conversa.
 
+## Importação e alertas
+
+A importação abre uma prévia para confirmar o destino, a origem e os registros selecionados. O mesmo arquivo e os identificadores bancários OFX já registrados no destino são descartados. Correspondências incertas ficam desmarcadas até a revisão. Em Negócio, as entradas importadas atualizam o caixa e podem ser classificadas como venda para compor o faturamento.
+
+Abra **Importações** em Lançamentos ou Meu negócio para consultar os últimos 30 lotes e desfazer um lote intacto. Se houve edição, exclusão ou vínculo depois da importação, revise os registros individualmente. A conta de origem serve para identificar os lançamentos importados.
+
+Os avisos de limites aparecem no painel. Para envio externo, a função valida sessão, regra de gasto e cota antes de chamar um provedor. O destinatário precisa estar confirmado e autorizado em `app_metadata.alva_verified_alerts`, escrito pelo servidor administrativo após a confirmação do contato. Use `email` e `whatsapp` nessa estrutura, e mantenha a preferência correspondente no perfil do usuário. Um endereço cadastrado sem confirmação de e-mail não equivale a um contato verificado.
+
+O e-mail requer `RESEND_API_KEY` e `ALVA_ALERT_FROM` na função. O WhatsApp requer `WHATSAPP_WEBHOOK_URL` HTTPS e pode usar `ALVA_WHATSAPP_WEBHOOK_TOKEN`. O webhook deve deduplicar pelo `idempotency_key` recebido. Publique a versão revisada de `financial-agent` junto com a interface para usar o envio externo. Os testes dessa função usam provedores simulados e Node.js 22.13 ou mais recente.
+
 ## Referências
 
 - [Autenticação por senha](https://supabase.com/docs/guides/auth/passwords)

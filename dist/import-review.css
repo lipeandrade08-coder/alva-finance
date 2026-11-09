@@ -1,0 +1,24 @@
+.import-review { display: grid; gap: 14px; }
+.import-fields { margin: 0; }
+.import-summary { font-size: 13px; font-weight: 700; color: #315341; }
+.import-rows { list-style: none; padding: 0; margin: 0; max-height: min(38vh, 360px); overflow: auto; border: 1px solid #dce8dc; border-radius: 12px; background: #fff8; }
+.import-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px; padding: 12px; }
+.import-row + .import-row { border-top: 1px solid #e3ece1; }
+.import-row-name, .import-row-value { display: grid; gap: 5px; font-size: 12px; }
+.import-row-name { overflow-wrap: anywhere; }
+.import-row-name small { color: #566d57; line-height: 1.45; }
+.import-row-value { justify-items: end; text-align: right; }
+.import-status { display: inline-block; width: fit-content; font-size: 10px; padding: 4px 7px; color: #4b6251; border-radius: 8px; background: #edf2eb; }
+.import-status.possible { color: #6d4c20; background: #fff0cf; }
+.import-status.ready { color: #2c5a40; background: #dfeee1; }
+.import-status.invalid { color: #8c3f36; background: #fae4de; }
+.import-include { display: flex; gap: 7px; align-items: center; min-height: 32px; color: #496454; }
+.import-include input, .business-sale-option input { accent-color: #256149; }
+.import-pages { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; }
+.import-review > .button { justify-self: start; }
+@media (max-width: 480px) {
+ .import-row { gap: 8px; padding: 10px; }
+ .import-row-value { max-width: 100px; }
+ .import-include { min-height: 44px; }
+ .import-pages .button { min-height: 44px; padding-inline: 9px; }
+}
