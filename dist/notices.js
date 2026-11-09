@@ -37,24 +37,32 @@ export function attentionPlan(state, today = noticeDate()) {
   const relevant = date => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) && date <= horizon;
   const commitments = [
     ...(state.debts ?? []).filter(item => item.balance > 0 && relevant(item.due)).map(item => ({
-      title: item.name, date: item.due, amount: item.balance, target: 'debts', section: 'Pessoal', action: 'Ver dívidas', amountLabel: 'em aberto'
+      itemId: item.id, entity: 'debt', title: item.name, date: item.due, amount: item.balance,
+      target: 'debts', section: 'Pessoal', action: 'Abrir dívida', amountLabel: 'em aberto'
     })),
-    ...(state.business?.records ?? []).filter(item => item.type === 'expense' && item.status === 'pending' && relevant(item.due_date)).map(item => ({
-      title: item.name, date: item.due_date, amount: item.amount, target: 'business', section: 'Negócio', action: 'Ver compromissos', amountLabel: 'a pagar'
+    ...(state.business?.records ?? []).filter(item => item.status === 'pending' && relevant(item.due_date)).map(item => ({
+      itemId: item.id, entity: 'record', title: item.name, date: item.due_date, amount: item.amount,
+      target: 'business', section: 'Negócio', action: item.type === 'income' ? 'Abrir recebimento' : 'Abrir conta',
+      amountLabel: item.type === 'income' ? 'a receber' : 'a pagar', isReceipt: item.type === 'income'
     })),
     ...(state.business?.taxes ?? []).filter(item => !item.paid && relevant(item.due_date)).map(item => ({
-      title: item.name, date: item.due_date, amount: item.amount, target: 'business', section: 'Negócio', action: 'Ver tributos', amountLabel: 'a pagar'
+      itemId: item.id, entity: 'tax', title: item.name, date: item.due_date, amount: item.amount,
+      target: 'business', section: 'Negócio', action: 'Abrir tributo', amountLabel: 'a pagar'
     }))
   ].sort((a, b) => a.date.localeCompare(b.date)).map(item => ({
-    title: item.title,
-    detail: `${item.section} · ${money(item.amount)} ${item.amountLabel} · ${item.date < today ? 'Venceu em' : 'Vence em'} ${dueText(item.date)}`,
-    target: item.target, action: item.action, priority: item.date <= today ? 0 : 2, icon: 'calendar'
+    itemId: item.itemId, entity: item.entity, title: item.title, target: item.target, action: item.action,
+    detail: `${item.section} · ${item.date < today ? 'Venceu em' : 'Vence em'} ${dueText(item.date)}`,
+    amounts: `${money(item.amount)} ${item.amountLabel}`,
+    priority: item.isReceipt ? (item.date <= today ? 2 : 4) : (item.date <= today ? 0 : 2),
+    icon: 'calendar'
   }));
   const limits = evaluateSpendingLimits(state, today.slice(0, 7)).filter(limit => levelOf(limit) > 0)
     .sort((a, b) => b.pct - a.pct).map(limit => ({
+      itemId: limit.id, entity: 'limit',
       title: `${limit.name} · ${limit.pct}% do limite`,
-      detail: `${money(limit.spent)} de ${money(limit.limit)} registrados neste mês.`,
-      target: 'transactions', action: 'Revisar gastos', priority: limit.exceeded ? 1 : 3, icon: 'wallet'
+      detail: 'Gastos registrados neste mês',
+      amounts: `${money(limit.spent)} de ${money(limit.limit)}`,
+      target: 'transactions', action: 'Revisar limite', priority: limit.exceeded ? 1 : 3, icon: 'wallet'
     }));
   return [...commitments, ...limits].sort((a, b) => a.priority - b.priority).slice(0, 3);
 }

@@ -34,15 +34,18 @@ test('a Central usa 80% exatos, registra 100% e não duplica avisos ao refazer u
 test('o assessor prioriza vencidos e limites atingidos, com ações pessoais e do negócio', () => {
   const state = {
     ...finances(10000),
-    debts: [{ name: 'Cartão', balance: 1000, due: '2026-11-15' }, { name: 'Quitada', balance: 0, due: '2026-11-08' }],
+    debts: [{ id: 'card', name: 'Cartão', balance: 1000, due: '2026-11-15' }, { name: 'Quitada', balance: 0, due: '2026-11-08' }],
     business: {
-      taxes: [{ name: 'DAS', amount: 7000, due_date: '2026-11-08', paid: false }],
+      taxes: [{ id: 'das', name: 'DAS', amount: 7000, due_date: '2026-11-08', paid: false }],
       records: [{ name: 'Venda a receber', amount: 500, type: 'income', status: 'pending', due_date: '2026-11-10' }]
     }
   };
   const plan = attentionPlan(state, '2026-11-09');
   assert.deepEqual(plan.map(item => item.target), ['business', 'transactions', 'debts']);
   assert.equal(plan[0].title, 'DAS');
+  assert.deepEqual(plan.map(({entity,itemId}) => [entity,itemId]), [
+    ['tax','das'], ['limit',state.spending_limits[0].id], ['debt','card']
+  ]);
   assert.match(plan[1].title, /Mercado.*100%/);
   assert.equal(plan[2].title, 'Cartão');
 });

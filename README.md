@@ -60,7 +60,11 @@ Login e cadastro têm vidro translúcido, luz ambiente, fundo em grade, cartão 
 
 Meu negócio atende MEIs, microempresas e autônomos: perfil, caixa, vendas, clientes/fornecedores, contas a receber/pagar, tributos informados e retirada vinculada ao pessoal. Vendas contam na data do registro; caixa muda na baixa. Não há pagamento bancário, emissão fiscal ou apuração de tributos.
 
-A IA conversacional ainda precisa de provedor e segredo no servidor. O sistema oferece análise automática dos registros enquanto isso. O simulador usa uma taxa hipotética, sem garantia de retorno, impostos, taxas ou inflação. Nenhuma ação financeira é executada pela conversa.
+A Alva usa os dados da conta e o período selecionado para responder. O modo em nuvem requer `OPENAI_API_KEY` em **Supabase → Edge Functions → Secrets** e a versão atual da função `financial-agent`. A função verifica a sessão e a cota antes de encaminhar o áudio. Na conversa, envia ao provedor totais e um recorte dos registros, sem enviar os campos de contato do perfil nem o CNPJ. Mantenha a chave fora do código e do navegador.
+
+O assistente pode gravar até 60 segundos ou receber um arquivo de áudio de até 2 MB. Quando a gravação em nuvem está disponível, a Alva usa o formato suportado pelo aparelho. O ditado do navegador depende das permissões e do suporte local. A transcrição abre para edição e a conta só é atualizada após confirmar a prévia.
+
+O simulador de investimentos usa uma taxa hipotética, sem garantia de retorno, impostos, taxas ou inflação. Nenhuma ação financeira é executada pela conversa.
 
 ## Importação e alertas
 

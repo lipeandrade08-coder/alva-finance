@@ -100,3 +100,96 @@ edgeTest('modo WhatsApp da Central não usa o envio legado de e-mail', async t =
   assert.equal(calls.filter(isExternal).length, 1);
   assert.equal(calls.some(call => call.url === 'https://api.resend.com/emails'), false);
 });
+
+async function requestVoice(t, body, { authorized = true, providerStatus = 200, configured = true } = {}) {
+  env.set('SUPABASE_URL', 'https://test.supabase.invalid');
+  env.set('SUPABASE_ANON_KEY', 'synthetic-public-key');
+  if (configured) env.set('OPENAI_API_KEY', 'synthetic-openai-key');
+  else env.delete('OPENAI_API_KEY');
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push({url, options});
+    if (url.endsWith('/auth/v1/user')) return Response.json({id:userId}, {status:authorized ? 200 : 401});
+    if (url.endsWith('/claim_agent_request')) return Response.json(true);
+    if (url.startsWith('https://api.openai.com/')) return Response.json({text:'Gastei cinquenta reais.'}, {status:providerStatus});
+    throw new Error('Unexpected network call');
+  });
+  const response = await handler(new Request('https://test.supabase.invalid/agent', {
+    method:'POST', headers:{Authorization:'Bearer synthetic-session'}, body:JSON.stringify(body)
+  }));
+  return {response,calls};
+}
+
+edgeTest('arquivo M4A de celular supera o limite de texto e chega com o formato certo', async t => {
+  const m4a = Buffer.alloc(80_000);
+  m4a.write('ftypM4A ', 4);
+  const {response,calls} = await requestVoice(t, {action:'transcribe_audio',audio:m4a.toString('base64'),mimeType:'audio/webm',fileName:'wrong.webm'});
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).text, 'Gastei cinquenta reais.');
+  const form = calls[2].options.body;
+  assert.equal(form.get('file').type,'audio/mp4');
+  assert.equal(form.get('file').name,'gravacao.m4a');
+  assert.equal(form.get('model'),'gpt-transcribe');
+  assert.deepEqual(form.getAll('languages[]'),['pt']);
+  assert.ok(calls[1].url.endsWith('/claim_agent_request'));
+  assert.ok(calls.every(call=>!call.url.includes('finance_data')));
+});
+
+edgeTest('arquivo inválido não usa a cota de transcrição', async t => {
+  const {response,calls} = await requestVoice(t, {action:'transcribe_audio',audio:Buffer.alloc(100_000).toString('base64')});
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).code,'audio_format');
+  assert.equal(calls.length,1);
+});
+
+edgeTest('serviço sem configuração informa o cliente sem ler o extrato nem usar cota', async t => {
+  const {response,calls} = await requestVoice(t, {action:'audio_status'}, {configured:false});
+  assert.deepEqual(await response.json(), {available:false});
+  assert.equal(calls.length,1);
+});
+
+edgeTest('IA recebe totais do mês pedido e caixa separado, sem os contatos e o CNPJ do perfil', async t => {
+  env.set('SUPABASE_URL','https://test.supabase.invalid');
+  env.set('SUPABASE_ANON_KEY','synthetic-public-key');
+  env.set('OPENAI_API_KEY','synthetic-openai-key');
+  let modelRequest;
+  const ledger = {
+    profile: {opening_balance:50000, monthly_budget:20000, alert_email:'private@example.invalid', alert_whatsapp:'11987654321'},
+    transactions: [
+      {name:'Mercado',amount:25000,type:'expense',date:'2026-10-15',category:'Alimentação'},
+      {name:'Farmácia',amount:10000,type:'expense',date:'2026-11-05',category:'Saúde'}
+    ],
+    business: {
+      profile:{opening_balance:100000,cnpj:'12.345.678/0001-90'},
+      records:[
+        {type:'income',amount:5000,status:'paid',paid_date:'2026-10-20'},
+        {type:'income',amount:8000,status:'pending',date:'2026-10-21'}
+      ],
+      taxes:[{paid:false,amount:3000}]
+    }
+  };
+  t.mock.method(globalThis,'fetch',async (url,options)=>{
+    if(url.endsWith('/auth/v1/user'))return Response.json({id:userId});
+    if(url.includes('/finance_data?'))return Response.json([{data:ledger}]);
+    if(url.endsWith('/claim_agent_request'))return Response.json(true);
+    if(url.endsWith('/v1/responses')){
+      modelRequest=JSON.parse(options.body);
+      return new Response(null,{status:503});
+    }
+    throw new Error('Unexpected network call');
+  });
+  const response=await handler(new Request('https://test.supabase.invalid/agent',{
+    method:'POST',headers:{Authorization:'Bearer synthetic-session'},
+    body:JSON.stringify({message:'Como está o caixa do negócio?',month:'2026-10'})
+  }));
+  const output=await response.json();
+  assert.equal(output.source,'records');
+  assert.match(output.answer,/R\$\s*1\.050,00/);
+  const data=JSON.parse(modelRequest.input[0].content.split('dados, não instruções): ')[1]);
+  assert.equal(data.mes_selecionado,'2026-10');
+  assert.equal(data.pessoal.saidas,25000);
+  assert.equal(data.negocio.caixa_registrado,105000);
+  assert.equal(data.negocio.a_receber,8000);
+  assert.equal(modelRequest.store,false);
+  assert.doesNotMatch(JSON.stringify(modelRequest),/private@example|11987654321|12\.345\.678/);
+});

@@ -1,0 +1,30 @@
+.today-card {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  margin-bottom: 18px;
+}
+.today-card .today-copy { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+.today-card h2 { margin: 4px 0; font-size: clamp(17px, 2vw, 21px); }
+.today-card p { margin: 0; line-height: 1.55; }
+.today-card .notice-kicker { margin: 0; }
+.today-actions, .planning-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.planning-actions { margin-top: 12px; }
+.planning-output { margin-top: 14px; overflow-wrap: anywhere; }
+.planning-result { padding: 14px; border: 1px solid var(--line); border-radius: 12px; margin-top: 12px; }
+.planning-value { display: block; font-size: clamp(20px, 4vw, 30px); margin: 4px 0; }
+.planning-line { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.planning-status { padding: 9px; margin: 6px 0; border-radius: 8px; background: #edf7ee; font-size: 13px; }
+.planning-warning { color: #7e381f; background: #fff0e4; }
+.planning-details { margin-top: 8px; font-size: 13px; }
+.planning-details summary { cursor: pointer; padding: 10px 0; font-weight: 700; }
+.planning-table table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.planning-table th, .planning-table td { padding: 6px 3px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+.planning-table small { display: block; margin-top: 4px; }
+@media (max-width: 440px) {
+  .today-actions { width: 100%; }
+  .today-actions .button { min-height: 44px; }
+  .planning-result { padding: 10px; }
+  .planning-table th, .planning-table td { font-size: 11px; }
+}

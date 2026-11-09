@@ -11,6 +11,14 @@ function localDate(value) {
   return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo' }).format(date) : '';
 }
 
+export function attentionButton(task) {
+  return `<button type="button" class="button secondary" data-notice-target="${task.target}" data-notice-entity="${task.entity}" data-notice-id="${e(task.itemId)}">${task.action}</button>`;
+}
+
+export function attentionDetails(task) {
+  return `${e(task.detail)} · <span class="money">${e(task.amounts)}</span>`;
+}
+
 export function createNoticeUI({ api, getData, isDemo, identity, icon, onUpdate, onReadDemo }) {
   let rows = [];
   let channel;
@@ -54,7 +62,7 @@ export function createNoticeUI({ api, getData, isDemo, identity, icon, onUpdate,
   function actionCards() {
     const tasks = attentionPlan(getData());
     if (!tasks.length) return `<div class="notice-empty"><strong>Seu dia está em ordem</strong><p>Quando houver um vencimento próximo ou um limite que merece atenção, ele aparece aqui.</p><button type="button" class="button secondary" data-nav="transactions">Revisar lançamentos</button></div>`;
-    return `<ul class="notice-list">${tasks.map(task => `<li class="notice-item"><span class="notice-icon">${icon(task.icon)}</span><div class="notice-copy"><strong>${e(task.title)}</strong><p>${e(task.detail)}</p></div><button type="button" class="button secondary" data-notice-target="${task.target}">${task.action}</button></li>`).join('')}</ul>`;
+    return `<ul class="notice-list">${tasks.map(task => `<li class="notice-item"><span class="notice-icon">${icon(task.icon)}</span><div class="notice-copy"><strong>${e(task.title)}</strong><p>${attentionDetails(task)}</p></div>${attentionButton(task)}</li>`).join('')}</ul>`;
   }
 
   function emailPanel() {
@@ -119,7 +127,10 @@ export function createNoticeUI({ api, getData, isDemo, identity, icon, onUpdate,
       if (row && !row.read_at) await markRead([row.id]);
       return { target: 'transactions', month: row?.month?.slice(0, 7) };
     }
-    if (button.dataset.noticeTarget) return { target: button.dataset.noticeTarget, month: noticeDate().slice(0, 7) };
+    if (button.dataset.noticeTarget) return {
+      target: button.dataset.noticeTarget, month: noticeDate().slice(0, 7),
+      entity: button.dataset.noticeEntity, itemId: button.dataset.noticeId
+    };
     const action = button.dataset.noticeAction;
     if (!action) return false;
     if (action === 'refresh') await refresh({ settings: true });

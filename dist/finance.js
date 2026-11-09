@@ -552,14 +552,20 @@ export function normalizeSpokenPortuguese(raw){
  s=s.replace(/(\d+)\s*(?:reais?\s+)?(?:e|com|vírgula|virgula)\s*(\d{1,2})\s*(?:centavos?)?\b/gi,(_,r,c)=>`${r},${c.padStart(2,'0')}`);
  return s;
 }
-function parseSingleChatClause(rawClause,state){
+function parseSingleChatClause(rawClause,state,strict=false){
  const q=normalizeSpokenPortuguese(rawClause).trim();if(!q)return null;
  const withoutInstallments=q.replace(/\b\d{1,3}\s*(?:x|parcelas?|vezes)\b/gi,' ').replace(/\b\d{1,2}[\/.-]\d{1,2}(?:[\/.-]\d{2,4})?\b/g,' ');
  const amtMatches=[...withoutInstallments.matchAll(/(?:R\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/g)];
  if(!amtMatches.length)return null;
- const amtToken=amtMatches.at(-1)[1];
- const amount=Math.abs(parseFlexAmount(amtToken));if(!amount)return null;
- const cleanLabel=raw=>raw.replace(amtMatches.at(-1)[0],'').replace(/\b(?:em\s*)?\d{1,3}\s*(?:x|parcelas?|vezes)\b/gi,'').replace(/\b(?:adicion(?:e|ar)|cri(?:e|ar)|registr(?:e|ar)|lan[cç](?:e|ar)|cadastr(?:e|ar)|coloc(?:a|ar)|tenho|quero|uma?|uns|umas|novo|nova|d[ií]vida|meta|objetivo|investimento|investi|apliquei|gastei|paguei|comprei|saiu|custou|passei|transferi|mandei|foi|deu|despesa|sa[ií]da|gasto|recebi|ganhei|entrou|caiu|faturei|vendi|pagaram|me|entrada|receita|sal[aá]rio|reais|real|centavos?|R\$|no|na|nos|nas|de|do|da|dos|das|com|em|por|para|pelo|pela|valor|hoje|ontem|agora|pix|cart[aã]o|d[eé]bito)\b/gi,' ').replace(/[:;,-]+/g,' ').replace(/\s+/g,' ').trim();
+ const spokenAmounts=strict?amtMatches.filter(match=>{
+  const before=withoutInstallments.slice(0,match.index);
+  const after=withoutInstallments.slice(match.index+match[0].length);
+  return /^R\$/i.test(match[0])||/^\s*(?:reais|real)\b/i.test(after)||
+   /\b(?:gastei|paguei|comprei|saiu|custou|recebi|ganhei|entrou|caiu|faturei|vendi|receita|entrada|despesa|valor de)\s*$/i.test(before);
+ }):[];
+ const amountMatch=spokenAmounts.length===1?spokenAmounts[0]:amtMatches.at(-1);
+ const amount=Math.abs(parseFlexAmount(amountMatch[1]));if(!amount)return null;
+ const cleanLabel=raw=>raw.replace(amountMatch[0],'').replace(/\b(?:em\s*)?\d{1,3}\s*(?:x|parcelas?|vezes)\b/gi,'').replace(/\b(?:adicion(?:e|ar)|cri(?:e|ar)|registr(?:e|ar)|lan[cç](?:e|ar)|cadastr(?:e|ar)|coloc(?:a|ar)|tenho|quero|uma?|uns|umas|novo|nova|d[ií]vida|meta|objetivo|investimento|investi|apliquei|gastei|paguei|comprei|saiu|custou|passei|transferi|mandei|foi|deu|despesa|sa[ií]da|gasto|recebi|ganhei|entrou|caiu|faturei|vendi|pagaram|me|entrada|receita|sal[aá]rio|reais|real|centavos?|R\$|no|na|nos|nas|de|do|da|dos|das|com|em|por|para|pelo|pela|valor|hoje|ontem|agora|pix|cart[aã]o|d[eé]bito)\b/gi,' ').replace(/[:;,-]+/g,' ').replace(/\s+/g,' ').trim();
  if(/\b(limit(?:ar|e)|teto\s+de\s+gasto)\b/i.test(q)){
   const name=(cleanLabel(q).replace(/\b(?:limit(?:ar|e)|teto|gasto|gastos|mensal|ate|até|para)\b/gi,' ').replace(/\s+/g,' ').trim()||'Gasto específico').slice(0,80);
   const label=name.charAt(0).toUpperCase()+name.slice(1);
@@ -596,6 +602,7 @@ function parseSingleChatClause(rawClause,state){
   return {kind:'investment',item:{id:crypto.randomUUID(),name:label,amount,kind},reply:`Pronto! Registrei o investimento "${label}" de ${money(amount)} (${kind}) e atualizei seu saldo.`};
  }
  if(/\b(gastei|paguei|comprei|saiu|custou|passei|transferi|mandei|foi|deu|despesa|sa[ií]da|gasto|recebi|ganhei|entrou|caiu|faturei|vendi|pagaram|reembolso|entrada|receita|sal[aá]rio|freela|freelance|lance|lan[cç]ar|adicione|adicionar|registre|registrar)\b/i.test(q)){
+  if(strict&&spokenAmounts.length!==1)throw new Error('A movimentação ficou incompleta ou tem mais de um valor possível. Confira o texto e informe o valor em reais.');
   const isIncome=/\b(recebi|ganhei|entrou|caiu|faturei|vendi|pagaram|reembolso|entrada|receita|sal[aá]rio|freela|freelance)\b/i.test(q)&&!/\b(gastei|paguei|comprei|saiu|custou|despesa|sa[ií]da)\b/i.test(q);
   const type=isIncome?'income':'expense';
   const rawName=cleanLabel(q)||(/sal[aá]rio/i.test(q)?'Salário':/freela/i.test(q)?'Freelance':isIncome?'Entrada':'Despesa');
@@ -605,7 +612,7 @@ function parseSingleChatClause(rawClause,state){
  }
  return null;
 }
-export function tryChatCommand(question,state){
+export function tryChatCommand(question,state,{strict=false}={}){
  const rawQ=String(question||'').replace(/^🎙️\s*[ÁA]udio:\s*/i,'').replace(/^["“”]|["“”]$/g,'').trim();
  if(!rawQ)return null;
  const q=normalizeSpokenPortuguese(rawQ);
@@ -631,14 +638,20 @@ export function tryChatCommand(question,state){
  // Se for uma pergunta informativa sem intenção de cadastro, deixa para a análise responder
  if(/\?$/.test(q)||/^(?:quanto|quais|qual|como|onde|por\s*que|analise|resumo|mostre|me\s+mostre|explique|calcule|simule)\b/i.test(q))return null;
  // Suporte a múltiplos lançamentos na mesma fala/mensagem (ex.: "gastei 50 no mercado e recebi 200 de freela")
- const parts=q.split(/\s+(?:e\s+tamb[eé]m|e\s+(?=(?:gastei|paguei|comprei|saiu|recebi|ganhei|entrou|caiu|faturei|vendi)\b)|;\s*)/i).map(s=>s.trim()).filter(Boolean);
+ if(strict&&/^(?:n[aã]o|nunca|talvez|se)\s+(?:eu\s+)?(?:gastei|paguei|comprei|recebi|ganhei|vendi|faturei)\b/i.test(q))return null;
+ const commandStart='(?:gastei|paguei|comprei|saiu|recebi|ganhei|entrou|caiu|faturei|vendi)';
+ const separator=new RegExp(`\\s+e\\s+(?:tamb[eé]m\\s+)?(?=${commandStart}\\b)|\\s*;\\s*|[.!]\\s+(?=${commandStart}\\b)`,'i');
+ const parts=q.split(separator).map(s=>s.trim()).filter(Boolean);
  if(parts.length>1){
-  const parsedItems=parts.map(p=>parseSingleChatClause(p,state)).filter(p=>p&&p.kind==='transaction');
+  const parsedItems=parts.map(p=>parseSingleChatClause(p,state,strict)).filter(p=>p&&p.kind==='transaction');
+  if(strict&&parsedItems.length!==parts.length){
+   throw new Error('Uma parte do áudio ficou incompleta. Revise o valor de cada movimentação ou envie uma por vez.');
+  }
   if(parsedItems.length>1){
    const items=parsedItems.map(p=>p.item);
    const summary=items.map(t=>`• ${t.type==='income'?'+':'−'} ${money(t.amount)} — ${t.name} (${t.category})`).join('\n');
    return {kind:'transactions',items,reply:`Reconheci ${items.length} movimentações no seu áudio/mensagem e atualizei seu painel:\n${summary}`};
   }
  }
- return parseSingleChatClause(q,state);
+ return parseSingleChatClause(q,state,strict);
 }

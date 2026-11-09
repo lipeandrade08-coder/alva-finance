@@ -23,7 +23,7 @@ function saveSession(data){
  session={...data,expires_at:Number(data.expires_at)||Math.floor(Date.now()/1000)+(Number(data.expires_in)||3600)};
  sessionStorage.setItem(SESSION_KEY,JSON.stringify(session));
 }
-async function request(path,{method='GET',body,token,headers={}}={}){if(!configured()){const error=new Error('O cadastro está sendo preparado. Tente novamente em breve.');error.code='not_configured';throw error;}const c=getConfig();const response=await fetch(`${c.supabaseUrl}${path}`,{method,headers:{apikey:c.supabasePublicKey,'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`} : {}),...headers},...(body!==undefined?{body:JSON.stringify(body)}:{}),...(typeof AbortSignal.timeout==='function'?{signal:AbortSignal.timeout(20000)}:{})});const result=await response.json().catch(()=>null);if(!response.ok){const error=new Error(result?.msg||result?.message||result?.error_description||result?.error||'Não foi possível concluir a operação.');error.status=response.status;error.code=result?.error_code||result?.code;if(token&&(error.status===401||error.code==='28000')){forgetSession();window.dispatchEvent?.(new Event('alva:session-expired'));}throw error;}return result;}
+async function request(path,{method='GET',body,token,headers={},timeoutMs=20000,signal}={}){if(!configured()){const error=new Error('O cadastro está sendo preparado. Tente novamente em breve.');error.code='not_configured';throw error;}const c=getConfig();const response=await fetch(`${c.supabaseUrl}${path}`,{method,headers:{apikey:c.supabasePublicKey,'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`} : {}),...headers},...(body!==undefined?{body:JSON.stringify(body)}:{}),...(signal?{signal}:typeof AbortSignal.timeout==='function'?{signal:AbortSignal.timeout(timeoutMs)}:{})});const result=await response.json().catch(()=>null);if(!response.ok){const error=new Error(result?.msg||result?.message||result?.error_description||result?.error||'Não foi possível concluir a operação.');error.status=response.status;error.code=result?.error_code||result?.code;if(token&&(error.status===401||error.code==='28000')){forgetSession();window.dispatchEvent?.(new Event('alva:session-expired'));}throw error;}return result;}
 export function normalizeEmail(email){const value=String(email||'').trim().toLowerCase();if(value.length>254||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))throw new Error('Informe um e-mail válido.');return value;}
 export function validatePassword(password){const value=String(password||'');if(value.length<10||!/[a-z]/.test(value)||!/[A-Z]/.test(value)||!/[0-9]/.test(value))throw new Error('Use ao menos 10 caracteres, com letras maiúsculas, minúsculas e um número.');if(new TextEncoder().encode(value).length>72)throw new Error('Use uma senha de até 72 bytes.');return value;}
 export async function signUp(email,password,name){const normalized=normalizeEmail(email),fullName=String(name||'').trim();if(!fullName||fullName.length>70)throw new Error('Informe seu nome, com até 70 caracteres.');const result=await request('/auth/v1/signup',{method:'POST',body:{email:normalized,password:validatePassword(password),data:{full_name:fullName}}});saveSession(result);return result;}
@@ -34,14 +34,37 @@ export async function acceptCallback(){const hash=new URLSearchParams(location.h
 export async function logout(){try{if(session)await request('/auth/v1/logout?scope=local',{method:'POST',token:await accessToken()});}catch{}finally{forgetSession();}}
 export async function loadAccount(){const token=await accessToken();const user=await request('/auth/v1/user',{token});await request('/rest/v1/rpc/ensure_alva_account',{method:'POST',token,body:{}});const [profiles,rows]=await Promise.all([request(`/rest/v1/profiles?id=eq.${user.id}&select=*`,{token}),request(`/rest/v1/finance_data?user_id=eq.${user.id}&select=data,revision`,{token})]);if(!rows?.[0])throw new Error('Não foi possível carregar seu espaço financeiro. Tente novamente.');return {user,profile:profiles?.[0],data:rows[0].data,revision:rows[0].revision};}
 export async function saveAccount(data,revision){return await request('/rest/v1/rpc/save_finances',{method:'POST',token:await accessToken(),body:{new_data:data,expected_revision:revision}});}
-export async function askAgent(message,history){return await request('/functions/v1/financial-agent',{method:'POST',token:await accessToken(),body:{message,history}});}
+export async function askAgent(message,history,month){return await request('/functions/v1/financial-agent',{method:'POST',token:await accessToken(),timeoutMs:26000,body:{message,history,month}});}
 export async function sendAlertNotification(limitId, {whatsappOnly=false}={}){
  if(!session)return null;
  try{
   return await request('/functions/v1/financial-agent',{method:'POST',token:await accessToken(),body:{action:'send_alert',limit_id:limitId,whatsapp_only:whatsappOnly}});
  }catch{return null;}
 }
-export async function transcribeAudio(audioBase64,mimeType='audio/webm',fileName='audio.webm'){try{if(!session)return null;return await request('/functions/v1/financial-agent',{method:'POST',token:await accessToken(),body:{action:'transcribe_audio',audio:audioBase64,mimeType,fileName}});}catch{return null;}}
+export async function audioStatus(){
+ return await request('/functions/v1/financial-agent',{method:'POST',token:await accessToken(),body:{action:'audio_status'}});
+}
+export async function transcribeAudio(file, signal){
+ const bytes=new Uint8Array(await file.arrayBuffer());
+ const chunks=[];
+ for(let i=0;i<bytes.length;i+=8192)chunks.push(String.fromCharCode(...bytes.subarray(i,i+8192)));
+ const token=await accessToken();
+ const controller=new AbortController();
+ const abort=()=>controller.abort();
+ if(signal?.aborted)abort();
+ signal?.addEventListener('abort',abort,{once:true});
+ const timer=setTimeout(abort,45000);
+ try{
+  return await request('/functions/v1/financial-agent',{method:'POST',token,signal:controller.signal,
+   body:{action:'transcribe_audio',audio:btoa(chunks.join(''))}});
+ }catch(error){
+  if(error.name==='AbortError'&&!signal?.aborted)throw new Error('A transcrição demorou demais. Tente reenviar o áudio.');
+  throw error;
+ }finally{
+  clearTimeout(timer);
+  signal?.removeEventListener('abort',abort);
+ }
+}
 
 const noticeFields='id,limit_id,month,level,label,spent_cents,limit_cents,created_at,read_at,email_state';
 export async function listNotices(){

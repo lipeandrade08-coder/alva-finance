@@ -1,0 +1,13 @@
+[data-voice-control] { display: contents; }
+[data-voice-status]:empty { display: none; }
+.voice-tools { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 0 16px 10px; }
+.voice-tools .text-button { min-height: 36px; }
+.voice-transcript { resize: vertical; min-height: 96px; }
+.voice-review-list { list-style: none; display: grid; gap: 8px; padding: 0; margin: 12px 0; }
+.voice-review-list li { padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
+.voice-review-list small { display: block; margin: 4px 0; color: #476452; }
+.voice-review-list .form-grid { margin-top: 8px; }
+@media (max-width: 700px) {
+  .voice-tools .text-button { min-height: 44px; }
+  .voice-status-bar { flex-wrap: wrap; }
+}
