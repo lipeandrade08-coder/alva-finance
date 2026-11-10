@@ -59,6 +59,10 @@ export function createImportUI({ getData, dialog, modal, commit, onImported }) {
     form.querySelector('#import-date-note').textContent = undated ? `${undated} registro${undated === 1 ? '' : 's'} com data a revisar. Informe a data correta para incluir na importação.` : '';
     form.querySelector('#import-business-note').hidden = plan.destination === 'personal';
     const notes = [...review.sourceNotes];
+    for (const reference of plan.references) {
+      const overdraft = reference.overdraft === null ? '' : ` · Cheque especial ${money(reference.overdraft)}`;
+      notes.push(`Referência da planilha para ${monthLabel(reference.month)} · Saldo disponível ${money(reference.available)} · Saldo da empresa ${money(reference.businessBalance)}${overdraft}`);
+    }
     if (plan.otherDestinationCount) {
       const other = destinationLabel(plan.destination === 'business' ? 'personal' : 'business');
       notes.push(`${plan.otherDestinationCount} registros de abas de ${other} estão separados. Para conferi-los, troque o destino.`);
@@ -85,8 +89,11 @@ export function createImportUI({ getData, dialog, modal, commit, onImported }) {
       return `${group}<li class="import-row"><div class="import-row-name"><strong>${e(row.record.name || labels[row.collection])}</strong><small>${detail}${dateText ? ` · ${e(dateText)}` : ''} · ${e(row.fileName)}${row.sheet ? ` · ${e(row.sheet)}` : ''}</small>${issue ? `<small>${e(issue)}</small>` : ''}${editor}${row.status === 'possible' ? `<label class="import-include"><input type="checkbox" data-import-choice="${index}" ${row.selected ? 'checked' : ''}>Incluir mesmo assim</label>` : ''}</div><div class="import-row-value"><strong class="money">${amountLabel(row.record)}</strong><span class="import-status ${row.status}">${status}</span></div></li>`;
     }).join('');
     form.querySelector('#import-pages').innerHTML = filtered.length > pageSize ? `<button type="button" class="button secondary" data-import-page="-1" ${review.page === 0 ? 'disabled' : ''}>Anterior</button><span>${start + 1}–${Math.min(start + pageSize, filtered.length)} de ${filtered.length}</span><button type="button" class="button secondary" data-import-page="1" ${start + pageSize >= filtered.length ? 'disabled' : ''}>Próxima</button>` : '';
-    form.querySelector('[type="submit"]').disabled = !plan.selected.length;
-    form.querySelector('[type="submit"]').textContent = plan.selected.length ? `Importar ${plan.selected.length} registro${plan.selected.length === 1 ? '' : 's'}` : 'Nenhum registro novo';
+    const submitButton = form.querySelector('[type="submit"]');
+    submitButton.disabled = !plan.selected.length && !plan.newReferences.length;
+    submitButton.textContent = plan.selected.length
+      ? `Importar ${plan.selected.length} registro${plan.selected.length === 1 ? '' : 's'}`
+      : plan.newReferences.length ? 'Salvar referência do mês' : 'Nenhum registro novo';
   }
 
   function open(documents, destination = 'personal') {
@@ -94,9 +101,9 @@ export function createImportUI({ getData, dialog, modal, commit, onImported }) {
     const sourceNotes = [];
     const ignored = [...new Set(documents.flatMap(document => document.ignoredSheets ?? []))];
     const unsettled = documents.reduce((count, document) => count + (document.unsettled ?? 0), 0);
-    if (ignored.length) sourceNotes.push(`Resumos e projeções ignorados: ${ignored.slice(0, 5).join(', ')}${ignored.length > 5 ? '…' : ''}.`);
+    if (ignored.length) sourceNotes.push(`Abas de resumo e projeção ficam fora dos lançamentos (${ignored.slice(0, 5).join(', ')}${ignored.length > 5 ? '…' : ''}).`);
     if (unsettled) sourceNotes.push(`${unsettled} movimentaç${unsettled === 1 ? 'ão pendente, prevista ou cancelada ficou' : 'ões pendentes, previstas ou canceladas ficaram'} fora da importação.`);
-    if (!documents.some(document => document.rows.length)) throw new Error(sourceNotes.join(' ') || 'Não encontrei registros no arquivo. Confira as colunas de descrição, data e valor.');
+    if (!documents.some(document => document.rows.length || document.references?.length)) throw new Error(sourceNotes.join(' ') || 'Não encontrei registros no arquivo. Confira as colunas de descrição, data e valor.');
     const scopes = new Set(documents.flatMap(document => document.rows.map(row => row.destination)));
     const mixed = scopes.has('personal') && scopes.has('business');
     if (mixed) destination = 'mixed';

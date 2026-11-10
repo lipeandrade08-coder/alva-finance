@@ -1,8 +1,8 @@
-import {categories,money,escapeHTML as e,dateISO,cents,numeric,emptyData,sampleData,totals,projection,budgetBreakdown,spendingPeriods,spendingReport,localAnswer,parseDocumentContent,tryChatCommand,debtMetrics,evaluateSpendingLimits,formatGoalCoachingPlan} from './finance.js';
+import {categories,money,escapeHTML as e,dateISO,cents,numeric,emptyData,sampleData,totals,monthlyStatement,projection,budgetBreakdown,spendingPeriods,spendingReport,localAnswer,parseDocumentContent,tryChatCommand,debtMetrics,evaluateSpendingLimits,formatGoalCoachingPlan} from './finance.js';
 import * as api from './api.js';
 import {createAuthUI} from './auth-ui.js';
 import {animateAuth,animatePage,animateModal,animateSimulation,setMenu,syncLayout} from './motion.js';
-import {addBusinessRecord,ensureBusiness,businessAnswer} from './business.js';
+import {addBusinessRecord,ensureBusiness,businessAnswer,businessTotals} from './business.js';
 import {createBusinessUI} from './business-ui.js';
 import {createImportUI} from './import-ui.js';
 import {readImportFile,readPastedImport} from './import-review.js';
@@ -50,6 +50,11 @@ const planningUI=createPlanningUI({getData:()=>data,modal,openWithdrawal:amount=
 const importUI=createImportUI({
  getData:()=>data,dialog:$('#modal'),modal,commit,
  onImported:result=>{
+  if(result.referenceMonth){
+   month=result.referenceMonth;
+   navigate('dashboard');
+   return;
+  }
   const batches=result.batches??[result];
   const destination=view==='business'?'business':'personal';
   const batch=batches.find(item=>item.destination===destination)??batches[0];
@@ -80,7 +85,8 @@ function toast(msg){$('#toast').textContent=msg;$('#toast').classList.add('show'
 function ledgerMonthOptions(){
  const rows=view==='business'?(data.business?.records??[]):data.transactions;
  const dates=rows.flatMap(row=>view==='business'?[row.date,row.paid_date]:[row.date]);
- const months=new Set([month,...dates.map(date=>String(date??'').slice(0,7)).filter(key=>/^\d{4}-(?:0[1-9]|1[0-2])$/.test(key))]);
+ const periods=[...dates.map(date=>String(date??'').slice(0,7)),...Object.keys(data.statement_months??{})];
+ const months=new Set([month,...periods.filter(key=>/^\d{4}-(?:0[1-9]|1[0-2])$/.test(key))]);
  return [...months].sort().reverse().map(key=>`<option value="${key}" ${key===month?'selected':''}>${e(monthLabel(key))}</option>`).join('');
 }
 function shell(){
@@ -132,7 +138,33 @@ function todayCard(){
   </div>
  </section>`;
 }
-function dashboard(){const t=totals(data,month);return `${todayCard()}<section class="stats" aria-label="Resumo financeiro">${stat('Saldo disponível',t.closingBalance,'wallet',`${icon('lock')}Até o fim de ${e(monthLabel())}`)}${stat('Entradas do mês',t.income,'in',`${icon('in')}Receitas registradas`)}${stat('Saídas do mês',t.expense,'up',`${icon('up')}Despesas registradas`)}${stat('Guardado em objetivos',t.saved,'target',`${icon('leaf')}${data.goals.length} objetivos no seu caminho`)}</section><div class="dashboard-grid"><section class="panel"><div class="panel-header"><div><h2>Seu dinheiro em movimento</h2><p class="panel-subtitle">Clareza para acompanhar suas escolhas</p></div><div class="chart-tabs"><button data-chart="flow" class="${chartMode==='flow'?'active':''}">Fluxo</button><button data-chart="balance" class="${chartMode==='balance'?'active':''}">Saldo</button></div></div><div class="chart-meta"><span><i class="legend-dot"></i>${chartMode==='flow'?'Entradas':'Saldo'}</span>${chartMode==='flow'?'<span><i class="legend-dot gray"></i>Saídas</span>':''}<span style="margin-left:auto">Acumulado do mês</span></div>${chart(t)}<div class="chart-bottom"><span>Dos seus registros, sem estimativas.</span><b>${t.income>=t.expense?'Entradas acima das saídas':'Revise seu orçamento'} ${icon('up')}</b></div></section><aside class="agent-card"><div class="agent-label"><span class="agent-mark">${icon('spark')}</span>Um olhar da Alva <small>IA ATIVA</small></div><h2>Pequenos passos.<br><em>Grandes possibilidades.</em></h2><p>${t.income>t.expense?`Você tem ${money(t.income-t.expense)} entre entradas e saídas do mês. Vamos planejar o próximo passo ou importar sua planilha?`:'Vamos olhar seus gastos, conversar ou importar sua planilha financeira?'}</p><button class="button light" data-nav="assistant">Conversar com a Alva${icon('arrow')}</button><div class="agent-foot">Assistente ativa · Aceita planilhas e extratos</div></aside><section class="panel">${panelHeader('Últimos lançamentos','Seu dia a dia, organizado',`<button class="text-button" data-nav="transactions">Ver todos${icon('chevron')}</button>`)}${transactionTable([...t.list].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,4))}</section><section class="panel goals-panel">${panelHeader('Sonhos em construção','Cada pouquinho faz diferença',`<button class="text-button" data-nav="goals">${icon('chevron')}<span class="visually-hidden">Ver objetivos</span></button>`)}<div class="goals-mini">${data.goals.slice(0,2).map(goalMini).join('')||'<div class="empty">Qual é o seu próximo sonho?</div>'}</div><button class="button ghost" data-action="goal">${icon('plus')}Criar um novo objetivo</button></section></div><div class="bottom-grid triple-grid">${spendingPanel()}${spendingLimitsPanel()}<section class="panel">${panelHeader('No seu radar','Compromissos que merecem atenção',`<button class="text-button" data-nav="notices">Abrir avisos${icon('chevron')}</button>`)}${data.debts.filter(d=>d.balance>0).slice().sort((a,b)=>a.due.localeCompare(b.due)).slice(0,3).map(d=>{const m=debtMetrics(d);return `<div class="next-bill"><div class="date-tile"><small>${new Date(d.due+'T12:00:00').toLocaleDateString('pt-BR',{month:'short'}).replace('.','').toUpperCase()}</small>${d.due.slice(8)}</div><div class="bill-info">${e(d.name)}<p>${m.installments}x de ${money(m.installmentAmount)}${m.interest>0?` · Juros: ${money(m.interest)}`:''}</p></div><span class="amount money">${money(m.balance)}</span></div>`;}).join('')||'<div class="empty">Nenhuma dívida em aberto. 🌱</div>'}</section></div>`;}
+function monthClosingPanel(personal){
+ const reference=data.statement_months?.[month];
+ if(!reference&&(!data.business?.records.length||!data.transactions.length))return '';
+ const business=businessTotals(data.business,month);
+ const {available,businessBalance}=monthlyStatement(personal,business);
+ const figures=[
+  ['Saldo disponível',available],
+  ['Receita pessoal',personal.income],
+  ['Receita da empresa',business.received],
+  ['Despesas pessoais',personal.expense],
+  ['Despesas da empresa',business.spent],
+  ['Saldo da empresa no mês',businessBalance]
+ ];
+ if(Number.isSafeInteger(reference?.overdraft))figures.push(['Cheque especial',reference.overdraft]);
+ const differs=reference&&(reference.available!==available||reference.businessBalance!==businessBalance);
+ return `<section class="panel statement-panel" aria-labelledby="statement-title">
+  <div class="panel-header">
+   <div><h2 id="statement-title">Fechamento do mês</h2><p class="panel-subtitle">${e(monthLabel())}</p></div>
+  </div>
+  <dl class="statement-grid">${figures.map(([label,amount])=>`<div>
+   <dt>${label}</dt><dd class="money ${amount<0?'negative':''}">${money(amount)}</dd>
+  </div>`).join('')}</dl>
+  <p class="form-note">Saldo disponível = receita pessoal + receita da empresa − despesas pessoais.</p>
+  ${differs?`<p class="statement-reference">Na planilha, o saldo disponível é <strong class="money">${money(reference.available)}</strong> e o saldo da empresa é <strong class="money">${money(reference.businessBalance)}</strong>. Confira se os lançamentos deste mês estão completos e sem duplicatas.</p>`:''}
+ </section>`;
+}
+function dashboard(){const t=totals(data,month);return `${todayCard()}${monthClosingPanel(t)}<section class="stats" aria-label="Resumo financeiro">${stat('Saldo pessoal acumulado',t.closingBalance,'wallet',`${icon('lock')}Até o fim de ${e(monthLabel())}`)}${stat('Entradas do mês',t.income,'in',`${icon('in')}Receitas registradas`)}${stat('Saídas do mês',t.expense,'up',`${icon('up')}Despesas registradas`)}${stat('Guardado em objetivos',t.saved,'target',`${icon('leaf')}${data.goals.length} objetivos no seu caminho`)}</section><div class="dashboard-grid"><section class="panel"><div class="panel-header"><div><h2>Seu dinheiro em movimento</h2><p class="panel-subtitle">Clareza para acompanhar suas escolhas</p></div><div class="chart-tabs"><button data-chart="flow" class="${chartMode==='flow'?'active':''}">Fluxo</button><button data-chart="balance" class="${chartMode==='balance'?'active':''}">Saldo</button></div></div><div class="chart-meta"><span><i class="legend-dot"></i>${chartMode==='flow'?'Entradas':'Saldo'}</span>${chartMode==='flow'?'<span><i class="legend-dot gray"></i>Saídas</span>':''}<span style="margin-left:auto">Acumulado do mês</span></div>${chart(t)}<div class="chart-bottom"><span>Dos seus registros, sem estimativas.</span><b>${t.income>=t.expense?'Entradas acima das saídas':'Revise seu orçamento'} ${icon('up')}</b></div></section><aside class="agent-card"><div class="agent-label"><span class="agent-mark">${icon('spark')}</span>Um olhar da Alva <small>IA ATIVA</small></div><h2>Pequenos passos.<br><em>Grandes possibilidades.</em></h2><p>${t.income>t.expense?`Você tem ${money(t.income-t.expense)} entre entradas e saídas do mês. Vamos planejar o próximo passo ou importar sua planilha?`:'Vamos olhar seus gastos, conversar ou importar sua planilha financeira?'}</p><button class="button light" data-nav="assistant">Conversar com a Alva${icon('arrow')}</button><div class="agent-foot">Assistente ativa · Aceita planilhas e extratos</div></aside><section class="panel">${panelHeader('Últimos lançamentos','Seu dia a dia, organizado',`<button class="text-button" data-nav="transactions">Ver todos${icon('chevron')}</button>`)}${transactionTable([...t.list].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,4))}</section><section class="panel goals-panel">${panelHeader('Sonhos em construção','Cada pouquinho faz diferença',`<button class="text-button" data-nav="goals">${icon('chevron')}<span class="visually-hidden">Ver objetivos</span></button>`)}<div class="goals-mini">${data.goals.slice(0,2).map(goalMini).join('')||'<div class="empty">Qual é o seu próximo sonho?</div>'}</div><button class="button ghost" data-action="goal">${icon('plus')}Criar um novo objetivo</button></section></div><div class="bottom-grid triple-grid">${spendingPanel()}${spendingLimitsPanel()}<section class="panel">${panelHeader('No seu radar','Compromissos que merecem atenção',`<button class="text-button" data-nav="notices">Abrir avisos${icon('chevron')}</button>`)}${data.debts.filter(d=>d.balance>0).slice().sort((a,b)=>a.due.localeCompare(b.due)).slice(0,3).map(d=>{const m=debtMetrics(d);return `<div class="next-bill"><div class="date-tile"><small>${new Date(d.due+'T12:00:00').toLocaleDateString('pt-BR',{month:'short'}).replace('.','').toUpperCase()}</small>${d.due.slice(8)}</div><div class="bill-info">${e(d.name)}<p>${m.installments}x de ${money(m.installmentAmount)}${m.interest>0?` · Juros: ${money(m.interest)}`:''}</p></div><span class="amount money">${money(m.balance)}</span></div>`;}).join('')||'<div class="empty">Nenhuma dívida em aberto. 🌱</div>'}</section></div>`;}
 function categoryIcon(t){const ic=t.type==='income'?'wallet':t.category==='Alimentação'?'food':t.category==='Transporte'?'car':t.category==='Moradia'?'house':'bag';const cls=t.type==='income'?'receita':t.category==='Alimentação'?'alimentacao':t.category==='Transporte'?'transporte':t.category==='Moradia'?'moradia':'';return `<span class="category-icon ${cls}">${icon(ic)}</span>`;}
 function transactionTable(list,full=false){return `<table class="transaction-table ${full?'full-table':''}"><thead><tr><th>Descrição</th><th class="category-column">Categoria</th><th>Data</th><th>Valor</th></tr></thead><tbody>${list.map(t=>`<tr><td><div class="transaction-name">${categoryIcon(t)}<div><strong>${e(t.name)}</strong><small>${t.type==='income'?'Entrada':'Saída'}${t.linked?' · vinculado':''}${t.import_account?' · '+e(t.import_account):''}</small></div></div></td><td class="category-column"><span class="tag">${e(t.category)}</span></td><td class="muted">${new Date(t.date+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'short'}).replace('.','')}</td><td><div class="row-actions"><span class="amount money ${t.type==='income'?'positive':''}">${t.type==='income'?'+':'−'} ${money(t.amount)}</span>${full&&!t.linked?`<button class="delete-button" data-delete="${e(t.id)}" aria-label="Excluir ${e(t.name)}">${icon('trash')}</button>`:''}</div></td></tr>`).join('')||'<tr><td colspan="4"><div class="empty">Nenhum lançamento neste período.<br>Comece registrando uma receita ou despesa.</div></td></tr>'}</tbody></table>`;}
 function goalMini(g){const p=Math.min(100,Math.round(g.saved/g.target*100));return `<div><div class="goal-top"><span class="goal-emoji">${e(g.emoji)}</span><div><h3>${e(g.name)}</h3><p>${p===100?'Objetivo alcançado!':'Seu futuro agradece'}</p></div><span class="percentage">${p}%</span></div><div class="progress"><span style="width:${p}%"></span></div><div class="goal-values"><b class="money">${money(g.saved)}</b><span class="money">de ${money(g.target)}</span></div></div>`;}

@@ -49,3 +49,16 @@
 .spending-share { align-items: center; margin-top: 4px; }
 .spending-share .progress { flex: 1; }
 .spending-share small { min-width: 34px; text-align: right; }
+
+.statement-panel { margin-bottom: 20px; }
+.statement-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 145px), 1fr));
+  gap: 10px;
+  margin: 0;
+}
+.statement-grid > div { padding: 10px 12px; border-radius: 10px; background: #edf4eb; }
+.statement-grid dt { color: #3f6150; font-size: 12px; }
+.statement-grid dd { margin: 3px 0 0; color: #194d3f; font-size: 17px; font-weight: 750; }
+.statement-grid dd.negative { color: #923f36; }
+.statement-reference { margin: 10px 0 0; padding: 10px 12px; border-radius: 10px; background: #fff0cf; color: #644920; font-size: 12px; }

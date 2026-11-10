@@ -30,6 +30,7 @@ async function prepareDocument(parsed, bytes, name) {
   return {
     name: String(name).slice(0, 100),
     rows,
+    references: parsed.statement_references ?? [],
     ignoredSheets: parsed.import_ignored_sheets ?? [],
     unsettled: parsed.import_unsettled ?? 0
   };
@@ -91,6 +92,16 @@ function increment(map, key) {
 }
 
 export function planImport(state, documents, options = {}) {
+  const references = [...new Map(documents.flatMap(document => document.references ?? [])
+    .map(reference => [reference.month, reference])).values()];
+  const newReferences = references.filter(reference => {
+    const saved = state.statement_months?.[reference.month];
+    return !saved || ['available', 'businessBalance', 'overdraft'].some(key => saved[key] !== reference[key]);
+  });
+  return { ...planTransactions(state, documents, options), references, newReferences };
+}
+
+function planTransactions(state, documents, options) {
   if (options.destination !== 'mixed') return planDestination(state, documents, options);
   let unassignedCount = 0;
   const scopedDocuments = documents.map(document => ({
@@ -198,13 +209,20 @@ function importedRows(state, batch) {
 
 export async function applyReviewedImport(state, documents, options) {
   const plan = planImport(state, documents, options);
-  if (!plan.selected.length) throw new Error('Nenhum registro novo para importar.');
-  if (plan.destination !== 'mixed') return saveImportBatch(state, plan);
+  if (!plan.selected.length && !plan.newReferences.length) throw new Error('Nenhum registro novo para importar.');
   const batches = [];
-  for (const scopedPlan of plan.plans) {
+  for (const scopedPlan of plan.plans ?? [plan]) {
     if (scopedPlan.selected.length) batches.push(await saveImportBatch(state, scopedPlan));
   }
-  return { destination: 'mixed', batches };
+  if (plan.newReferences.length) {
+    state.statement_months = {
+      ...state.statement_months,
+      ...Object.fromEntries(plan.newReferences.map(reference => [reference.month, reference]))
+    };
+  }
+  const referenceMonth = plan.references.map(reference => reference.month).sort().at(-1);
+  if (batches.length === 1 && plan.destination !== 'mixed') return { ...batches[0], referenceMonth };
+  return { destination: plan.destination, batches, referenceMonth };
 }
 
 async function saveImportBatch(state, plan) {

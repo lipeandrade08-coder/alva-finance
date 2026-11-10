@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { emptyData, totals } from '../dist/finance.js';
+import { emptyData, monthlyStatement, totals } from '../dist/finance.js';
 import { businessTotals } from '../dist/business.js';
 import { applyReviewedImport, planImport, readImportFile, readPastedImport, undoReviewedImport } from '../dist/import-review.js';
 
@@ -210,4 +210,30 @@ test('coluna Destino separa despesas da mesma aba e mantém saldo informado fora
   await applyReviewedImport(state, [document], { destination: 'mixed' });
   assert.deepEqual(state.transactions.map(row => row.amount), [2350]);
   assert.deepEqual(state.business.records.map(row => row.amount), [12345]);
+});
+
+test('referência mensal do Excel é salva separadamente e pode ser recuperada sem duplicar lançamentos', async () => {
+  const bytes = await readFile(new URL('./fixtures/importacao-abas-mistas.xlsx', import.meta.url));
+  const document = await readImportFile(file('controle.xlsx', bytes));
+  const state = emptyData();
+  const options = { destination: 'mixed' };
+  const month = '2026-08';
+  const expected = { month, available: 247005, businessBalance: 84260, overdraft: 6500 };
+  assert.deepEqual(document.references, [expected]);
+
+  await applyReviewedImport(state, [{ ...document, references: [] }], options);
+  const before = state.transactions.length + state.business.records.length;
+  const review = planImport(state, [document], options);
+  assert.equal(review.selected.length, 0);
+  assert.deepEqual(review.newReferences, [expected]);
+  const result = await applyReviewedImport(state, [document], options);
+  assert.equal(result.referenceMonth, month);
+  assert.equal(result.batches.length, 0);
+  assert.equal(state.transactions.length + state.business.records.length, before);
+  assert.deepEqual(state.statement_months[month], expected);
+  assert.deepEqual(monthlyStatement(totals(state, month), businessTotals(state.business, month)), {
+    available: expected.available,
+    businessBalance: expected.businessBalance
+  });
+  assert.equal(planImport(state, [document], options).newReferences.length, 0);
 });
