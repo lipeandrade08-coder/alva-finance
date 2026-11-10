@@ -158,12 +158,6 @@ export function totals(state, month) {
   list
  };
 }
-export function monthlyStatement(personal, business) {
- return {
-  available: personal.income + business.received - personal.expense,
-  businessBalance: business.received - business.spent
- };
-}
 export function projection(initial,monthly,annual,years){const rate=Math.pow(1+annual/100,1/12)-1;const months=Math.round(years*12);let total=initial;const points=[total];for(let n=1;n<=months;n++){total=total*(1+rate)+monthly;if(n%12===0)points.push(total);}return {total:Math.round(total),contributed:initial+monthly*months,points};}
 function expenseBreakdown(transactions,inPeriod){
  const sums=new Map();
@@ -342,36 +336,6 @@ function typedColumnAmount(raw){
  if(/^\(.*\)$/.test(text))text='-'+text.slice(1,-1).trim();
  text=text.replace(/^([+-]?)\s*R\$\s*/i,'$1').replace(/\s/g,'');
  return /^[+-]?\d[\d.,]*$/.test(text)?parseFlexAmount(text):0;
-}
-
-function readStatementReference(rows, date1904) {
- const headerRows=rows.slice(0,30);
- const dateRow=headerRows.find(row=>row.some(cell=>/^mes de referencia\s*:?$/.test(normStr(cell))));
- if(!dateRow)return null;
- const labelIndex=dateRow.findIndex(cell=>/^mes de referencia\s*:?$/.test(normStr(cell)));
- const rawDate=dateRow.slice(labelIndex+1).find(cell=>String(cell??'').trim());
- const month=parseImportDate(rawDate,{serial:true,date1904}).slice(0,7);
- if(!month)return null;
-
- for(const [index,row] of headerRows.entries()){
-  const headers=row.map(normStr);
-  const availableColumn=headers.findIndex(label=>/^saldo (?:total|disponivel)$/.test(label));
-  const businessColumn=headers.findIndex(label=>/^saldo (?:da empresa|do negocio)$/.test(label));
-  if(availableColumn<0||businessColumn<0)continue;
-  const values=headerRows[index+1]??[];
-  const amountAt=column=>{
-   const value=values[column];
-   const amount=typedColumnAmount(value);
-   if(Number.isSafeInteger(amount)&&Math.abs(amount)<=10_000_000_000&&
-    (amount!==0||/^(?:R\$\s*)?[+-]?0+(?:[.,]0+)?$/.test(String(value??'').trim())))return amount;
-   return null;
-  };
-  const available=amountAt(availableColumn),businessBalance=amountAt(businessColumn);
-  if(available===null||businessBalance===null)return null;
-  const overdraft=amountAt(headers.indexOf('cheque especial'));
-  return {month,available,businessBalance,overdraft};
- }
- return null;
 }
 
 const ledgerFamily = label => normStr(label).match(/^(.+?)\s+[-–—]\s+(receitas|despesas)$/);
@@ -697,17 +661,9 @@ export async function parseXlsxBuffer(buffer,fileName=''){
     }
     row[colIdx(ref)]=typeof val==='number'?val:String(val??'').trim();
    }
-   if(row.some(c=>String(c??'').trim()))sheetRows.push(Array.from({length:row.length},(_,i)=>row[i]??''));
+   if(row.some(c=>c&&String(c).trim()))sheetRows.push(Array.from({length:row.length},(_,i)=>row[i]??''));
   }
   const sheet=sheetNames.get(path)||'';
-  if(/^(?:visao geral|resumo|painel|dashboard|consolidado)\b/.test(normStr(sheet))){
-   const reference=readStatementReference(sheetRows,date1904);
-   if(reference){
-    (result.statement_references??=[]).push(reference);
-    (result.import_ignored_sheets??=[]).push(sheet);
-    continue;
-   }
-  }
   parseTableRows(sheetRows,result,sheet,{sheet,date1904,year:importPeriod(fileName).year,businessFamilies});
  }
  return result;

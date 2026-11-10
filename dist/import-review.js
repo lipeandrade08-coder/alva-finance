@@ -29,8 +29,9 @@ async function prepareDocument(parsed, bytes, name) {
   }
   return {
     name: String(name).slice(0, 100),
+    source,
+    spreadsheet: /\.xlsx$/i.test(name),
     rows,
-    references: parsed.statement_references ?? [],
     ignoredSheets: parsed.import_ignored_sheets ?? [],
     unsettled: parsed.import_unsettled ?? 0
   };
@@ -91,14 +92,37 @@ function increment(map, key) {
   return count;
 }
 
-export function planImport(state, documents, options = {}) {
-  const references = [...new Map(documents.flatMap(document => document.references ?? [])
-    .map(reference => [reference.month, reference])).values()];
-  const newReferences = references.filter(reference => {
-    const saved = state.statement_months?.[reference.month];
-    return !saved || ['available', 'businessBalance', 'overdraft'].some(key => saved[key] !== reference[key]);
+function replacementCandidates(state, documents, destination) {
+  const workbooks = documents.filter(document => document.spreadsheet);
+  if (!workbooks.length) return [];
+  const scopes = new Set(workbooks.flatMap(document => document.rows.map(row => row.destination)));
+  if (scopes.has('personal') && scopes.has('business') && destination !== 'mixed') return [];
+  const sources = new Set(workbooks.map(document => document.source));
+  const monthsByName = new Map();
+  for (const document of workbooks) {
+    const months = monthsByName.get(document.name) ?? new Set();
+    for (const row of document.rows) {
+      if (row.collection === 'transactions' && validImportDate(row.record.date)) months.add(row.record.date.slice(0, 7));
+    }
+    monthsByName.set(document.name, months);
+  }
+  return (state.import_batches ?? []).filter(batch => {
+    if (batch.undone_at || !destinations.includes(batch.destination)) return false;
+    if (batch.files?.length !== 1) return false;
+    const rows = importedRows(state, batch);
+    if (!rows.length || rows.length !== batch.count) return false;
+    if (rows.every(({ record }) => sources.has(record.import_source?.split(':')[0]))) return true;
+    const months = monthsByName.get(batch.files[0]);
+    const dated = rows.filter(({ collection }) => collection === 'transactions');
+    return months && dated.length > 0 && dated.every(({ record }) => months.has(record.date?.slice(0, 7)));
   });
-  return { ...planTransactions(state, documents, options), references, newReferences };
+}
+
+export function planImport(state, documents, options = {}) {
+  const candidates = replacementCandidates(state, documents, options.destination);
+  const replacements = candidates.filter(batch => options.replace?.has(batch.id));
+  const excludedBatches = new Set(replacements.map(batch => batch.id));
+  return { ...planTransactions(state, documents, { ...options, excludedBatches }), candidates, replacements };
 }
 
 function planTransactions(state, documents, options) {
@@ -125,10 +149,15 @@ function planTransactions(state, documents, options) {
   };
 }
 
-function planDestination(state, documents, { destination = 'personal', account = '', include = new Set(), dates = new Map() } = {}) {
+function planDestination(state, documents, { destination = 'personal', account = '', include = new Set(), dates = new Map(), excludedBatches } = {}) {
   const scope = normalize(account);
-  const existing = existingRows(state, destination);
-  const knownKeys = new Set(existing.map(({ record }) => record.import_source).filter(Boolean));
+  const existing = existingRows(state, destination).filter(({ record }) => !excludedBatches.has(record.import_batch_id));
+  const opposite = destination === 'personal' ? 'business' : 'personal';
+  const foreignKeys = new Set(existingRows(state, opposite)
+    .filter(({ record }) => !excludedBatches.has(record.import_batch_id))
+    .map(({ record }) => record.import_source).filter(Boolean));
+  const knownKeys = new Map(existing.filter(({ record }) => record.import_source)
+    .map(({ collection, record }) => [record.import_source, matchKey(collection, record)]));
   const bankKeys = new Set(existing.map(({ record }) => record.import_bank_key).filter(Boolean));
   const previousCounts = new Map();
   for (const { collection, record } of existing) {
@@ -137,7 +166,7 @@ function planDestination(state, documents, { destination = 'personal', account =
   }
   const rows = [];
   let otherDestinationCount = 0;
-  const counts = { ready: 0, possible: 0, repeated: 0, invalid: 0, unsupported: 0 };
+  const counts = { ready: 0, possible: 0, repeated: 0, conflict: 0, invalid: 0, unsupported: 0 };
   for (const document of documents) {
     const occurrences = new Map();
     for (const original of document.rows) {
@@ -160,12 +189,17 @@ function planDestination(state, documents, { destination = 'personal', account =
       } else {
         const signature = matchKey(row.collection, row.record);
         const ordinal = increment(occurrences, signature);
-        if (knownKeys.has(row.key) || (row.bankKey && bankKeys.has(row.bankKey))) {
+        const known = knownKeys.get(row.key);
+        const mismatch = known !== undefined && known !== signature;
+        const wrongDestination = original.destination && foreignKeys.has(row.key);
+        if (document.spreadsheet && (mismatch || wrongDestination)) {
+          status = 'conflict';
+        } else if (known !== undefined || (row.bankKey && bankKeys.has(row.bankKey))) {
           status = 'repeated';
         } else {
           status = ordinal <= (previousCounts.get(signature) ?? 0) ? 'possible' : 'ready';
         }
-        knownKeys.add(row.key);
+        if (status !== 'conflict') knownKeys.set(row.key, signature);
         if (row.bankKey) bankKeys.add(row.bankKey);
       }
       counts[status]++;
@@ -175,7 +209,33 @@ function planDestination(state, documents, { destination = 'personal', account =
       previousCounts.set(signature, Math.max(count, previousCounts.get(signature) ?? 0));
     }
   }
-  return { destination, account: String(account).trim().slice(0, 60), counts, otherDestinationCount, ...summarizeRows(rows) };
+  const summary = summarizeRows(rows);
+  const comparison = comparePeriods(rows, existing, summary.periods, destination);
+  return { destination, account: String(account).trim().slice(0, 60), counts, otherDestinationCount, comparison, ...summary };
+}
+
+function comparePeriods(rows, existing, periods, destination) {
+  const comparison = new Map();
+  for (const period of periods.keys()) {
+    if (/^\d{4}-\d{2}$/.test(period)) {
+      comparison.set(period, { file: { income: 0, expense: 0 }, after: { income: 0, expense: 0 } });
+    }
+  }
+  for (const { collection, record } of existing) {
+    if (collection !== 'transactions' || (destination === 'business' && record.status !== 'paid')) continue;
+    const date = destination === 'business' ? record.paid_date || record.date : record.date;
+    const totals = comparison.get(date?.slice(0, 7));
+    if (totals && ['income', 'expense'].includes(record.type)) totals.after[record.type] += record.amount;
+  }
+  const counted = new Set();
+  for (const row of rows) {
+    const totals = comparison.get(row.period);
+    if (!totals || row.collection !== 'transactions' || row.status === 'invalid' || row.status === 'unsupported') continue;
+    if (!counted.has(row.key)) totals.file[row.record.type] += row.record.amount;
+    counted.add(row.key);
+    if (row.selected) totals.after[row.record.type] += row.record.amount;
+  }
+  return comparison;
 }
 
 function summarizeRows(rows) {
@@ -209,20 +269,16 @@ function importedRows(state, batch) {
 
 export async function applyReviewedImport(state, documents, options) {
   const plan = planImport(state, documents, options);
-  if (!plan.selected.length && !plan.newReferences.length) throw new Error('Nenhum registro novo para importar.');
+  if (plan.counts.conflict) throw new Error('Há divergências com um lote anterior. Revise a substituição antes de importar.');
+  if (!plan.selected.length) throw new Error('Nenhum registro novo para importar.');
+  await Promise.all(plan.replacements.map(batch => validateUndo(state, batch)));
+  for (const batch of plan.replacements) removeBatch(state, batch);
+  if (plan.destination !== 'mixed') return saveImportBatch(state, plan);
   const batches = [];
-  for (const scopedPlan of plan.plans ?? [plan]) {
+  for (const scopedPlan of plan.plans) {
     if (scopedPlan.selected.length) batches.push(await saveImportBatch(state, scopedPlan));
   }
-  if (plan.newReferences.length) {
-    state.statement_months = {
-      ...state.statement_months,
-      ...Object.fromEntries(plan.newReferences.map(reference => [reference.month, reference]))
-    };
-  }
-  const referenceMonth = plan.references.map(reference => reference.month).sort().at(-1);
-  if (batches.length === 1 && plan.destination !== 'mixed') return { ...batches[0], referenceMonth };
-  return { destination: plan.destination, batches, referenceMonth };
+  return { destination: 'mixed', batches };
 }
 
 async function saveImportBatch(state, plan) {
@@ -260,6 +316,12 @@ async function saveImportBatch(state, plan) {
 export async function undoReviewedImport(state, batchId) {
   const batch = (state.import_batches ?? []).find(item => item.id === batchId);
   if (!batch || batch.undone_at) throw new Error('Esta importação já foi desfeita ou não está mais no histórico.');
+  await validateUndo(state, batch);
+  removeBatch(state, batch);
+  return batch;
+}
+
+async function validateUndo(state, batch) {
   const rows = importedRows(state, batch);
   if (rows.length !== batch.count || await batchDigest(rows) !== batch.digest) {
     throw new Error('Há registros alterados ou removidos neste lote. Revise os lançamentos individualmente.');
@@ -269,6 +331,9 @@ export async function undoReviewedImport(state, batchId) {
   if (allRecords.some(record => ids.has(record.linked) && !ids.has(record.id))) {
     throw new Error('Este lote tem movimentações vinculadas. Revise os lançamentos individualmente.');
   }
+}
+
+function removeBatch(state, batch) {
   if (batch.destination === 'business') {
     state.business.records = state.business.records.filter(record => record.import_batch_id !== batch.id);
   } else {
@@ -277,5 +342,4 @@ export async function undoReviewedImport(state, batchId) {
     }
   }
   batch.undone_at = new Date().toISOString();
-  return batch;
 }

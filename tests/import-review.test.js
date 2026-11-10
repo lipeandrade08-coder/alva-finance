@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { emptyData, monthlyStatement, totals } from '../dist/finance.js';
+import { emptyData, totals } from '../dist/finance.js';
 import { businessTotals } from '../dist/business.js';
 import { applyReviewedImport, planImport, readImportFile, readPastedImport, undoReviewedImport } from '../dist/import-review.js';
 
@@ -212,28 +212,55 @@ test('coluna Destino separa despesas da mesma aba e mantém saldo informado fora
   assert.deepEqual(state.business.records.map(row => row.amount), [12345]);
 });
 
-test('referência mensal do Excel é salva separadamente e pode ser recuperada sem duplicar lançamentos', async () => {
+test('corrige lote antigo do mesmo Excel sem confundir posição da linha com duplicata', async () => {
   const bytes = await readFile(new URL('./fixtures/importacao-abas-mistas.xlsx', import.meta.url));
   const document = await readImportFile(file('controle.xlsx', bytes));
   const state = emptyData();
-  const options = { destination: 'mixed' };
-  const month = '2026-08';
-  const expected = { month, available: 247005, businessBalance: 84260, overdraft: 6500 };
-  assert.deepEqual(document.references, [expected]);
+  const previous = {
+    ...document,
+    spreadsheet: false,
+    rows: document.rows.filter(row => row.collection === 'transactions' && row.record.date)
+      .map(row => ({
+        ...row,
+        destination: undefined,
+        record: { ...row.record, type: 'expense', amount: row.record.amount + 10 }
+      }))
+  };
+  const wrongBatch = await applyReviewedImport(state, [previous]);
+  state.transactions.push({ id: 'manual', name: 'Compra avulsa', date: '2026-11-01', type: 'expense', amount: 1000 });
+  const before = structuredClone(state);
 
-  await applyReviewedImport(state, [{ ...document, references: [] }], options);
-  const before = state.transactions.length + state.business.records.length;
-  const review = planImport(state, [document], options);
-  assert.equal(review.selected.length, 0);
-  assert.deepEqual(review.newReferences, [expected]);
-  const result = await applyReviewedImport(state, [document], options);
-  assert.equal(result.referenceMonth, month);
-  assert.equal(result.batches.length, 0);
-  assert.equal(state.transactions.length + state.business.records.length, before);
-  assert.deepEqual(state.statement_months[month], expected);
-  assert.deepEqual(monthlyStatement(totals(state, month), businessTotals(state.business, month)), {
-    available: expected.available,
-    businessBalance: expected.businessBalance
-  });
-  assert.equal(planImport(state, [document], options).newReferences.length, 0);
+  const blocked = planImport(state, [document], { destination: 'mixed' });
+  assert.ok(blocked.counts.conflict > 0);
+  assert.equal(blocked.counts.repeated, 0);
+  assert.deepEqual(blocked.candidates.map(batch => batch.id), [wrongBatch.id]);
+  await assert.rejects(applyReviewedImport(state, [document], { destination: 'mixed' }), /divergências/);
+  assert.deepEqual(state, before);
+
+  const options = { destination: 'mixed', replace: new Set([wrongBatch.id]) };
+  const reviewed = planImport(state, [document], options);
+  assert.deepEqual(reviewed.plans.map(plan => plan.comparison.get('2026-11')), [
+    { file: { income: 183544, expense: 7280 }, after: { income: 183544, expense: 8280 } },
+    { file: { income: 70000, expense: 12999 }, after: { income: 70000, expense: 12999 } }
+  ]);
+  await applyReviewedImport(state, [document], options);
+  assert.ok(state.import_batches.find(batch => batch.id === wrongBatch.id).undone_at);
+  assert.equal(state.transactions.filter(row => row.id === 'manual').length, 1);
+  assert.equal(totals(state, '2026-11').expense, 8280);
+  assert.equal(businessTotals(state.business, '2026-11').spent, 12999);
+  assert.equal(planImport(state, [document], { destination: 'mixed' }).selected.length, 0);
+});
+
+test('substituição de dois lotes preserva ambos se um foi editado após a importação', async () => {
+  const bytes = await readFile(new URL('./fixtures/importacao-abas-mistas.xlsx', import.meta.url));
+  const document = await readImportFile(file('controle.xlsx', bytes));
+  const state = emptyData();
+  const { batches } = await applyReviewedImport(state, [document], { destination: 'mixed' });
+  state.business.records[0].amount++;
+  const before = structuredClone(state);
+  await assert.rejects(
+    applyReviewedImport(state, [document], { destination: 'mixed', replace: new Set(batches.map(batch => batch.id)) }),
+    /registros alterados/
+  );
+  assert.deepEqual(state, before);
 });
