@@ -31,9 +31,15 @@ function previewComparison(plan, period) {
   return (plan.plans ?? [plan]).map(scoped => {
     const values = scoped.comparison.get(period);
     if (!values) return '';
+    const unmatched = values.unmatched.length ? `<details class="import-unmatched">
+      <summary>Já na Alva e sem correspondência no arquivo (${values.unmatched.length})</summary>
+      <ul>${values.unmatched.slice(0, 10).map(record => `<li>${e(dateLabel(record.date))} · ${e(record.name)} · <span class="money">${amountLabel(record)}</span></li>`).join('')}</ul>
+      ${values.unmatched.length > 10 ? '<p>Veja os demais lançamentos na área correspondente.</p>' : ''}
+    </details>` : '';
     return `<div class="import-comparison-group"><b>${destinationLabel(scoped.destination)}</b>
       <div class="import-period-totals"><span>No arquivo</span>${totalsLabel(values.file)}</div>
       ${plan.counts.conflict ? '' : `<div class="import-period-totals"><span>Após importar</span>${totalsLabel(values.after)}</div>`}
+      ${unmatched}
     </div>`;
   }).join('');
 }
@@ -105,7 +111,7 @@ export function createImportUI({ getData, dialog, modal, commit, onImported }) {
       const status = row.needsDate && row.status === 'invalid' ? 'Data a revisar' : statuses[row.status];
       const kind = row.collection === 'transactions' ? row.record.type === 'income' ? 'Entrada' : 'Saída' : labels[row.collection];
       const detail = plan.plans ? `${destinationLabel(row.destination)} · ${kind}` : kind;
-      return `${group}<li class="import-row"><div class="import-row-name"><strong>${e(row.record.name || labels[row.collection])}</strong><small>${detail}${dateText ? ` · ${e(dateText)}` : ''} · ${e(row.fileName)}${row.sheet ? ` · ${e(row.sheet)}` : ''}</small>${issue ? `<small>${e(issue)}</small>` : ''}${editor}${row.status === 'possible' ? `<label class="import-include"><input type="checkbox" data-import-choice="${index}" ${row.selected ? 'checked' : ''}>Incluir mesmo assim</label>` : ''}</div><div class="import-row-value"><strong class="money">${amountLabel(row.record)}</strong><span class="import-status ${row.status}">${status}</span></div></li>`;
+      return `${group}<li class="import-row"><div class="import-row-name"><strong>${e(row.record.name || labels[row.collection])}</strong><small>${detail}${dateText ? ` · ${e(dateText)}` : ''} · ${e(row.fileName)}${row.sheet ? ` · ${e(row.sheet)}${row.cell ? '!' + e(row.cell) : ''}` : ''}</small>${issue ? `<small>${e(issue)}</small>` : ''}${editor}${row.status === 'possible' ? `<label class="import-include"><input type="checkbox" data-import-choice="${index}" ${row.selected ? 'checked' : ''}>Incluir mesmo assim</label>` : ''}</div><div class="import-row-value"><strong class="money">${row.issue && !row.record.amount ? '—' : amountLabel(row.record)}</strong><span class="import-status ${row.status}">${status}</span></div></li>`;
     }).join('');
     form.querySelector('#import-pages').innerHTML = filtered.length > pageSize ? `<button type="button" class="button secondary" data-import-page="-1" ${review.page === 0 ? 'disabled' : ''}>Anterior</button><span>${start + 1}–${Math.min(start + pageSize, filtered.length)} de ${filtered.length}</span><button type="button" class="button secondary" data-import-page="1" ${start + pageSize >= filtered.length ? 'disabled' : ''}>Próxima</button>` : '';
     form.querySelector('[type="submit"]').disabled = !plan.selected.length || Boolean(plan.counts.conflict);
@@ -119,6 +125,8 @@ export function createImportUI({ getData, dialog, modal, commit, onImported }) {
     const sourceNotes = [];
     const ignored = [...new Set(documents.flatMap(document => document.ignoredSheets ?? []))];
     const unsettled = documents.reduce((count, document) => count + (document.unsettled ?? 0), 0);
+    const unverified = documents.reduce((count, document) => count + (document.unverified ?? 0), 0);
+    if (unverified) sourceNotes.push(`Linhas sem data ou com valores ambíguos ficaram fora da importação (${unverified}).`);
     if (ignored.length) sourceNotes.push(`Resumos e projeções ignorados: ${ignored.slice(0, 5).join(', ')}${ignored.length > 5 ? '…' : ''}.`);
     if (unsettled) sourceNotes.push(`${unsettled} movimentaç${unsettled === 1 ? 'ão pendente, prevista ou cancelada ficou' : 'ões pendentes, previstas ou canceladas ficaram'} fora da importação.`);
     if (!documents.some(document => document.rows.length)) throw new Error(sourceNotes.join(' ') || 'Não encontrei registros no arquivo. Confira as colunas de descrição, data e valor.');

@@ -20,11 +20,11 @@ async function prepareDocument(parsed, bytes, name) {
   for (const collection of collections) {
     for (const [index, item] of parsed[collection].entries()) {
       const { ofx_reference: reference, import_date_raw: sourceDate, import_issue: issue,
-        import_sheet: sheet, import_destination: destination, ...record } = item;
+        import_sheet: sheet, import_cell: cell, import_destination: destination, ...record } = item;
       const bankKey = reference && parsed.ofx_account
         ? await digest(textBytes(JSON.stringify([parsed.ofx_account, reference])))
         : '';
-      rows.push({ collection, record, key: `${source}:${collection}:${index}`, bankKey, sourceDate, issue, sheet, destination });
+      rows.push({ collection, record, key: `${source}:${collection}:${index}`, bankKey, sourceDate, issue, sheet, cell, destination });
     }
   }
   return {
@@ -33,7 +33,8 @@ async function prepareDocument(parsed, bytes, name) {
     spreadsheet: /\.xlsx$/i.test(name),
     rows,
     ignoredSheets: parsed.import_ignored_sheets ?? [],
-    unsettled: parsed.import_unsettled ?? 0
+    unsettled: parsed.import_unsettled ?? 0,
+    unverified: parsed.import_unverified ?? 0
   };
 }
 
@@ -218,22 +219,31 @@ function comparePeriods(rows, existing, periods, destination) {
   const comparison = new Map();
   for (const period of periods.keys()) {
     if (/^\d{4}-\d{2}$/.test(period)) {
-      comparison.set(period, { file: { income: 0, expense: 0 }, after: { income: 0, expense: 0 } });
+      comparison.set(period, { file: { income: 0, expense: 0 }, after: { income: 0, expense: 0 }, unmatched: [] });
     }
+  }
+  const counted = new Set();
+  const available = new Map();
+  for (const row of rows) {
+    const totals = comparison.get(row.period);
+    if (!totals || row.collection !== 'transactions' || row.status === 'invalid' || row.status === 'unsupported') continue;
+    if (!counted.has(row.key)) {
+      totals.file[row.record.type] += row.record.amount;
+      if (!row.selected) increment(available, matchKey(row.collection, row.record));
+    }
+    counted.add(row.key);
+    if (row.selected) totals.after[row.record.type] += row.record.amount;
   }
   for (const { collection, record } of existing) {
     if (collection !== 'transactions' || (destination === 'business' && record.status !== 'paid')) continue;
     const date = destination === 'business' ? record.paid_date || record.date : record.date;
     const totals = comparison.get(date?.slice(0, 7));
-    if (totals && ['income', 'expense'].includes(record.type)) totals.after[record.type] += record.amount;
-  }
-  const counted = new Set();
-  for (const row of rows) {
-    const totals = comparison.get(row.period);
-    if (!totals || row.collection !== 'transactions' || row.status === 'invalid' || row.status === 'unsupported') continue;
-    if (!counted.has(row.key)) totals.file[row.record.type] += row.record.amount;
-    counted.add(row.key);
-    if (row.selected) totals.after[row.record.type] += row.record.amount;
+    if (!totals || !['income', 'expense'].includes(record.type)) continue;
+    totals.after[record.type] += record.amount;
+    const signature = matchKey(collection, { ...record, date });
+    const remaining = available.get(signature) ?? 0;
+    if (remaining) available.set(signature, remaining - 1);
+    else totals.unmatched.push({ name: record.name, amount: record.amount, type: record.type, date });
   }
   return comparison;
 }
@@ -297,6 +307,10 @@ async function saveImportBatch(state, plan) {
       import_account: plan.account
     };
     if (row.bankKey) metadata.import_bank_key = row.bankKey;
+    if (row.sheet && row.cell) {
+      metadata.import_sheet = row.sheet.slice(0, 100);
+      metadata.import_cell = row.cell;
+    }
     if (batch.destination === 'business') {
       const { id, name, amount, type, date } = row.record;
       ensureBusiness(state).records.push({

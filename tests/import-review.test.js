@@ -240,8 +240,9 @@ test('corrige lote antigo do mesmo Excel sem confundir posição da linha com du
   const options = { destination: 'mixed', replace: new Set([wrongBatch.id]) };
   const reviewed = planImport(state, [document], options);
   assert.deepEqual(reviewed.plans.map(plan => plan.comparison.get('2026-11')), [
-    { file: { income: 183544, expense: 7280 }, after: { income: 183544, expense: 8280 } },
-    { file: { income: 70000, expense: 12999 }, after: { income: 70000, expense: 12999 } }
+    { file: { income: 183544, expense: 7280 }, after: { income: 183544, expense: 8280 },
+      unmatched: [{ name: 'Compra avulsa', amount: 1000, type: 'expense', date: '2026-11-01' }] },
+    { file: { income: 70000, expense: 12999 }, after: { income: 70000, expense: 12999 }, unmatched: [] }
   ]);
   await applyReviewedImport(state, [document], options);
   assert.ok(state.import_batches.find(batch => batch.id === wrongBatch.id).undone_at);
@@ -263,4 +264,23 @@ test('substituição de dois lotes preserva ambos se um foi editado após a impo
     /registros alterados/
   );
   assert.deepEqual(state, before);
+});
+
+test('importa valor pago e rejeita números ambíguos, previsões e linhas de saldo', async () => {
+  const document = await readPastedImport([
+    'Controle;7500;10/11/2026',
+    'Data;Descrição;Tipo;Valor previsto;Valor pago;Saldo',
+    '05/11/2026;Fornecedor;Saída;1000,00;35,50;5000,00',
+    '06/11/2026;Crédito;Entrada;3000,00;1,234.56;8000,00',
+    '07/11/2026;Valor ambíguo;Saída;300,00;1,234;5000,00',
+    '08/11/2026;Sem pagamento;Saída;900,00;;7000,00',
+    '09/11/2026;Saldo disponível;Entrada;8000;8000;8000'
+  ].join('\n'));
+  const plan = planImport(emptyData(), [document]);
+  assert.deepEqual(plan.selected.map(({ record }) => [record.name, record.amount]), [
+    ['Fornecedor', 3550], ['Crédito', 123456]
+  ]);
+  assert.equal(plan.counts.invalid, 1);
+  assert.match(plan.rows.find(row => row.status === 'invalid').issue, /1,234.*ambíguo/);
+  assert.equal(plan.periods.get('2026-11').expense, 3550);
 });

@@ -328,14 +328,37 @@ function detectDelimiter(text){
  return {separator:best.score?best.separator:'\0',text};
 }
 
-const summaryRow = value => /^(?:total|subtotal|soma|resumo|saldo)(?:$|\s*[:=]|\s+(?:anterior|final|inicial|geral|do|de|das|dos|receitas|despesas|entradas|saidas|mensal|pago|janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\b)/.test(normStr(value));
+const summaryRow = value => /^(?:total|subtotal|soma|resumo|saldo)(?:$|\s*[:=]|\s+(?:anterior|final|inicial|geral|disponivel|acumulado|total|do|da|de|das|dos|receitas|despesas|entradas|saidas|mensal|pago|janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro|\d{4})\b)/.test(normStr(value));
 const withSourceDate = (raw,date) => !date && String(raw??'').trim() ? { import_date_raw:String(raw).trim().slice(0,80) } : {};
 function typedColumnAmount(raw){
- if(typeof raw==='number')return parseFlexAmount(raw);
- let text=String(raw??'').trim().replace('−','-');
- if(/^\(.*\)$/.test(text))text='-'+text.slice(1,-1).trim();
- text=text.replace(/^([+-]?)\s*R\$\s*/i,'$1').replace(/\s/g,'');
- return /^[+-]?\d[\d.,]*$/.test(text)?parseFlexAmount(text):0;
+ let value=raw;
+ if(typeof raw!=='number'){
+  let text=String(raw??'').trim().replace('−','-');
+  if(!text||/^[-–—]$/.test(text))return 0;
+  if(/^\(.*\)$/.test(text))text='-'+text.slice(1,-1).trim();
+  text=text.replace(/^([+-]?)\s*R\$\s*/i,'$1');
+  if(/^[+-]?(?:\d+|\d{1,3}(?:\.\d{3})+),\d{1,2}$/.test(text))text=text.replace(/\./g,'').replace(',','.');
+  else if(/^[+-]?\d{1,3}(?:\.\d{3})+$/.test(text))text=text.replace(/\./g,'');
+  else if(/^[+-]?\d{1,3}(?:,\d{3})+\.\d{1,2}$/.test(text)||/^[+-]?\d{1,3}(?:,\d{3}){2,}$/.test(text))text=text.replace(/,/g,'');
+  else if(!/^[+-]?\d+(?:\.\d{1,2})?$/.test(text))return null;
+  value=Number(text);
+ }
+ if(!Number.isFinite(value)||Math.abs(value)>1e8)return null;
+ const scaled=Math.abs(value)*100;
+ return Math.sign(value)*Math.round(scaled+scaled*Number.EPSILON);
+}
+
+const dateColumns = /\b(data|dt|dia|competencia|emissao|date)\b/;
+const nonMovementAmount = /\b(saldo|acumulad[oa]s?|orcamento|limite|previst[oa]s?|estimad[oa]s?|projetad[oa]s?|planejad[oa]s?|percentual)\b/;
+
+function tableHeader(row, hint){
+ const headers=row.map(normStr);
+ let name=headers.findIndex(h=>/\b(descricao|description|historico|nome|titulo|estabelecimento|detalhe|credor|fornecedor|cliente|fonte)\b/.test(h)&&!dateColumns.test(h));
+ if(name<0)name=headers.findIndex(h=>/^(lancamento|item|divida|meta|objetivo|investimento|conta|origem|referencia)$/.test(h));
+ if(name<0&&/\binvestimentos?\b/.test(hint))name=headers.findIndex(h=>/^(tipo|ativo|instituicao)$/.test(h));
+ if(name<0||row.some(isImportDateText))return null;
+ const amount=headers.findIndex((h,i)=>i!==name&&/\b(valor|quantia|total|saldo|montante|preco|entrada|entradas|receita|receitas|saida|saidas|despesa|despesas|credito|debito|amount|value|meta|alvo|parcela|aplicado|aberto)\b/.test(h));
+ return amount<0?null:{headers,name,amount};
 }
 
 const ledgerFamily = label => normStr(label).match(/^(.+?)\s+[-–—]\s+(receitas|despesas)$/);
@@ -349,7 +372,7 @@ function importDestination(label, businessFamilies) {
  return personal?'personal':'business';
 }
 
-function parseTableRows(rows,result,sheetHint='', {year,date1904=false,sheet='',businessFamilies=new Set()}={}){
+function parseTableRows(rows,result,sheetHint='', {year,date1904=false,sheet='',businessFamilies=new Set(),cellReferences=[],summaryFormulas=[]}={}){
  if(!rows?.length)return;
  let colMap=null;
  const hintNorm=normStr(sheetHint).replace(/\.(?:csv|tsv|txt)$/,'');
@@ -358,7 +381,6 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false,sheet='',
  const direction=incomeSheet===expenseSheet?'':incomeSheet?'income':'expense';
  const destination=importDestination(hintNorm,businessFamilies);
  const source={...(sheet?{import_sheet:sheet}:{}),...(destination?{import_destination:destination}:{})};
- const dates=/\b(data|dt|dia|competencia|emissao|date)\b/;
  const summarySheet=/(?:^|\s[-–—]\s)(?:visao geral|resumo|painel|dashboard|consolidado|clientes ativos)\b/.test(hintNorm);
  const recurringList=rows.some(row=>row.some(cell=>/^valor mensal(?:\s+\(r\$\))?$/.test(normStr(cell)))&&row.some(cell=>/^(?:cliente|status)$/.test(normStr(cell))));
  const dateHeader=/^(?:data|dt|dia|competencia|emissao|date)(?:\s+(?:d[aoe] )?(?:pagamento|recebimento|lancamento|compra|movimento))?$/;
@@ -369,6 +391,7 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false,sheet='',
  const sheetPeriod=importPeriod(sheetHint,year);
  let period=sheetPeriod,yearHint=sheetPeriod.year;
  const readDate=value=>parseImportDate(value,{period,date1904,serial:true});
+ const firstTable=rows.findIndex(row=>tableHeader(row,hintNorm));
  for(let r=0;r<rows.length;r++){
   const cells=rows[r];
   const row=cells.map(c=>String(c??'').trim());
@@ -379,18 +402,26 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false,sheet='',
    if(hint.month&&!isImportDateText(label))period=hint;
    else if(/^ano\s*[:\-]?\s*\d{4}$/.test(label)){yearHint=hint.year;period={...period,year:yearHint};}
   }
-  if(nonEmpty.length<2 && !(row.length===1&&isImportDateText(row[0].split(/\s+/)[0])))continue;
-  const headers=row.map(normStr);
-  let descIdx=headers.findIndex(h=>/\b(descricao|description|historico|nome|titulo|estabelecimento|detalhe|credor|fornecedor|cliente|fonte)\b/.test(h)&&!dates.test(h));
-  if(descIdx<0)descIdx=headers.findIndex(h=>/^(lancamento|item|divida|meta|objetivo|investimento|conta|origem|referencia)$/.test(h));
-  if(descIdx<0&&/\binvestimentos?\b/.test(hintNorm))descIdx=headers.findIndex(h=>/^(tipo|ativo|instituicao)$/.test(h));
-  const valIdx=headers.findIndex((h,i)=>i!==descIdx&&/\b(valor|quantia|total|saldo|montante|preco|entrada|entradas|receita|receitas|saida|saidas|despesa|despesas|credito|debito|amount|value|meta|alvo|parcela|aplicado|aberto)\b/.test(h));
-  if(descIdx>=0&&valIdx>=0&&!row.some(c=>isImportDateText(c))){
+  if(r<firstTable||(nonEmpty.length<2&&!(row.length===1&&isImportDateText(row[0].split(/\s+/)[0]))))continue;
+  const header=tableHeader(row,hintNorm);
+  if(header){
+   const {headers,name:descIdx,amount:valIdx}=header;
+   const movementColumn=(label,index)=>index!==descIdx&&!dateColumns.test(label)&&!nonMovementAmount.test(label);
+   const selectAmounts=(pattern,exclude)=> {
+    const columns=headers.flatMap((label,index)=>movementColumn(label,index)&&pattern.test(label)&&!exclude?.test(label)?[index]:[]);
+    const settled=columns.filter(index=>/\b(pag[oa]|recebid[oa]|liquidad[oa]|realizad[oa]|baixad[oa]|liquid[oa])\b/.test(headers[index]));
+    return settled.length?settled:columns;
+   };
+   const excludedDirection=/\b(tipo|categoria|total|status|origem|conta)\b/;
+   const amountColumns=selectAmounts(/\b(valor|quantia|montante|preco|amount|value)\b/);
+   const incomeColumns=selectAmounts(/\b(entrada|entradas|receita|receitas|credito|ganho|credit)\b/,excludedDirection);
+   const expenseColumns=selectAmounts(/\b(saida|saidas|despesa|despesas|debito|gasto|gastos|debit)\b/,excludedDirection);
    colMap={
     name:descIdx,
-    amount:headers.findIndex((h,i)=>i!==descIdx&&!/\b(saldo|acumulado|orcamento|limite)\b/.test(h)&&/\b(valor|quantia|montante|preco|amount|value)\b/.test(h)),
-    incomeCol:headers.findIndex((h,i)=>i!==descIdx&&!dates.test(h)&&!/\b(tipo|categoria|saldo|total|limite|orcamento)\b/.test(h)&&/\b(entrada|entradas|receita|receitas|credito|ganho|credit)\b/.test(h)),
-    expenseCol:headers.findIndex((h,i)=>i!==descIdx&&!dates.test(h)&&!/\b(tipo|categoria|saldo|total|limite|orcamento)\b/.test(h)&&/\b(saida|saidas|despesa|despesas|debito|gasto|gastos|debit)\b/.test(h)),
+    amount:amountColumns[0]??-1,
+    incomeCol:incomeColumns[0]??-1,
+    expenseCol:expenseColumns[0]??-1,
+    ambiguousAmount:[amountColumns,incomeColumns,expenseColumns].some(columns=>columns.length>1),
     total:headers.findIndex((h,i)=>i!==descIdx&&/\b(total|valor total|meta|alvo|objetivo)\b/.test(h)),
     balance:headers.findIndex((h,i)=>i!==descIdx&&/\b(saldo|aberto|restante|devedor)\b/.test(h)),
     saved:headers.findIndex((h,i)=>i!==descIdx&&/\b(guardado|acumulado|ja pago|pago)\b/.test(h)),
@@ -398,7 +429,7 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false,sheet='',
     destination:headers.findIndex((h,i)=>i!==descIdx&&/^(?:destino|escopo|conta|carteira|empresa|tipo de conta|centro de custo)$/.test(h)),
     status:headers.findIndex(h=>/^(?:status|situacao)\b/.test(h)),
     category:headers.findIndex(h=>/\b(categoria|classificacao|grupo|setor|area|category)\b/.test(h)),
-    date:headers.findIndex((h,i)=>i!==descIdx&&dates.test(h)&&!/\b(vencimento|prazo)\b/.test(h)),
+    date:headers.findIndex((h,i)=>i!==descIdx&&dateColumns.test(h)&&!/\b(vencimento|prazo)\b/.test(h)),
     due:headers.findIndex(h=>/\b(vencimento|prazo|ate|limite)\b/.test(h)),
     installments:headers.findIndex(h=>/\b(parcela|parcelas|qtd|vezes)\b/.test(h)),
     section:/divida|devedor|emprestimo/.test(hintNorm)||headers.some(h=>/\b(divida|saldo devedor|credor)\b/.test(h))&&!headers.some(h=>/\b(entrada|receita)\b/.test(h))?'debt':/meta|objetivo/.test(hintNorm)||headers.some(h=>/\b(meta|objetivo|valor alvo|guardado)\b/.test(h))?'goal':/investimento/.test(hintNorm)||headers.some(h=>/\b(investimento|valor aplicado|modalidade)\b/.test(h))?'investment':'transaction'
@@ -440,12 +471,21 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false,sheet='',
     if(amt>0)result.investments.push({id:crypto.randomUUID(),name:name.slice(0,80),amount:amt,kind:catCell||'Renda fixa',...rowSource});
     continue;
    }
-   const income=Math.abs(typedColumnAmount(value(colMap.incomeCol)));
-   const expense=Math.abs(typedColumnAmount(value(colMap.expenseCol)));
+   const credit=typedColumnAmount(value(colMap.incomeCol));
+   const debit=typedColumnAmount(value(colMap.expenseCol));
    const signed=typedColumnAmount(value(colMap.amount));
-   const conflict=income>0&&expense>0;
+   const income=Math.abs(credit), expense=Math.abs(debit);
    const amount=income||expense||Math.abs(signed);
-   if(!amount)continue;
+   const column=credit===null||income?colMap.incomeCol:debit===null||expense?colMap.expenseCol:colMap.amount;
+   const cell=cellReferences[r]?.[column];
+   let issue='';
+   if(income&&expense)issue='Entrada e saída preenchidas na mesma linha';
+   else if(credit===null||debit===null||(!income&&!expense&&signed===null)){
+    issue=`O valor “${String(value(column)).slice(0,60)}” tem formato inválido ou ambíguo. Corrija no arquivo.`;
+   }
+   else if(colMap.ambiguousAmount&&amount)issue='Mais de uma coluna de valor possível. Identifique o valor pago ou recebido no cabeçalho.';
+   else if(summaryFormulas[r]?.has(column))issue='Fórmula de subtotal ou resumo';
+   if(!amount&&!issue)continue;
    const status=normStr(get(colMap.status));
    if(unsettledStatus.test(status)){
     result.import_unsettled=(result.import_unsettled??0)+1;
@@ -462,17 +502,22 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false,sheet='',
     type=signed>0&&(received||incomeLabel)?'income':'expense';
    }
    const matchedCat=categories.find(c=>normStr(c)===normStr(catCell))||inferCategory(name,type);
-   result.transactions.push({id:crypto.randomUUID(),name,amount,type,category:matchedCat,date:dt,...withSourceDate(rawDate,dt),...rowSource,...(conflict?{import_issue:'Entrada e saída preenchidas na mesma linha'}:{})});
+   result.transactions.push({id:crypto.randomUUID(),name,amount:issue?0:amount,type,category:matchedCat,date:dt,
+    ...withSourceDate(rawDate,dt),...rowSource,...(cell?{import_cell:cell}:{}),...(issue?{import_issue:issue}:{})});
   }else{
    // Row without detected header yet: inspect cells structurally
-   let dt='',rawDate='',signed=0,catMatch='',texts=[];
+   let dt='',rawDate='',signed=0,catMatch='',texts=[],amountColumn=-1,amountCount=0;
    for(const [i,cell] of row.entries()){
     if(!cell)continue;
     if(!rawDate&&(isImportDateText(cell)||(i===0&&isExcelDateCell(cell)))){rawDate=cell;dt=readDate(cell);continue;}
     const foundCat=categories.find(c=>normStr(c)===normStr(cell));
     if(foundCat&&!catMatch){catMatch=foundCat;continue;}
     const val=typedColumnAmount(cells[i]);
-    if(val!==0&&signed===0){signed=val;continue;}
+    if(val){
+     amountCount++;
+     if(amountColumn<0){signed=val;amountColumn=i;}
+     continue;
+    }
     if(!/^(pix|boleto|cr[eé]dito|d[eé]bito|dinheiro|transfer[eê]ncia|pago|pendente)$/i.test(cell))texts.push(cell);
    }
    if(!signed&&row.length===1){
@@ -489,6 +534,10 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false,sheet='',
     }
    }
    if(!signed||!texts.length)continue;
+   if(row.length>1&&(!dt||amountCount!==1||summaryFormulas[r]?.has(amountColumn))){
+    result.import_unverified=(result.import_unverified??0)+1;
+    continue;
+   }
    const fullText=row.join(' ');
    const name=texts[0].slice(0,100);
    if(summaryRow(name))continue;
@@ -501,7 +550,8 @@ function parseTableRows(rows,result,sheetHint='', {year,date1904=false,sheet='',
    }else{
     const isInc=/\b(sal[aá]rio|receita|entrada|recebi|freela|dep[oó]sito|rendimento)\b/i.test(fullText)&&signed>0;
     const type=direction||(isInc?'income':'expense');
-    result.transactions.push({id:crypto.randomUUID(),name,amount:Math.abs(signed),type,category:catMatch||inferCategory(name,type),date:dt,...withSourceDate(rawDate,dt),...source});
+    const cell=cellReferences[r]?.[amountColumn];
+    result.transactions.push({id:crypto.randomUUID(),name,amount:Math.abs(signed),type,category:catMatch||inferCategory(name,type),date:dt,...withSourceDate(rawDate,dt),...source,...(cell?{import_cell:cell}:{})});
    }
   }
  }
@@ -643,13 +693,17 @@ export async function parseXlsxBuffer(buffer,fileName=''){
  const result={transactions:[],debts:[],goals:[],investments:[],profile:{}};
  for(const [path,xml] of Object.entries(files).sort((a,b)=>a[0].localeCompare(b[0]))){
   if(!path.startsWith('xl/worksheets/'))continue;
-  const sheetRows=[];
+  const sheetRows=[],cellReferences=[],summaryFormulas=[];
   for(const rm of xml.matchAll(/<row\b[^>]*?(?:\/>|>([\s\S]*?)<\/row>)/g)){
-   const row=[];
+   const row=[],references=[],aggregates=new Set();
    for(const cm of (rm[1]||'').matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)){
     const attrs=cm[1],inner=cm[2]||'';
     const ref=attr(attrs,'r');
     if(!ref||!/^([A-Z]{1,3})\d+$/.test(ref))continue;
+    const column=colIdx(ref);
+    references[column]=ref;
+    const formula=inner.match(/<f(?:\s[^>]*)?>([\s\S]*?)<\/f>/)?.[1];
+    if(formula&&/\b(?:SUBTOTAL|AGGREGATE|SUMIF|SUMIFS)\s*\(/i.test(formula))aggregates.add(column);
     const type=attr(attrs,'t')||'';
     const styleIdx=Number(attr(attrs,'s'));
     const vMatch=inner.match(/<v>([\s\S]*?)<\/v>/),inline=inner.match(/<is>([\s\S]*?)<\/is>/);
@@ -659,12 +713,16 @@ export async function parseXlsxBuffer(buffer,fileName=''){
     else if((!type||type==='n')&&val!==''&&Number.isFinite(Number(val))){
      val=dateStyleIds.has(styleIdx)?excelDate(val,date1904)||val:Number(val);
     }
-    row[colIdx(ref)]=typeof val==='number'?val:String(val??'').trim();
+    row[column]=typeof val==='number'?val:String(val??'').trim();
    }
-   if(row.some(c=>c&&String(c).trim()))sheetRows.push(Array.from({length:row.length},(_,i)=>row[i]??''));
+   if(row.some(c=>String(c??'').trim())){
+    sheetRows.push(Array.from({length:row.length},(_,i)=>row[i]??''));
+    cellReferences.push(references);
+    summaryFormulas.push(aggregates);
+   }
   }
   const sheet=sheetNames.get(path)||'';
-  parseTableRows(sheetRows,result,sheet,{sheet,date1904,year:importPeriod(fileName).year,businessFamilies});
+  parseTableRows(sheetRows,result,sheet,{sheet,date1904,year:importPeriod(fileName).year,businessFamilies,cellReferences,summaryFormulas});
  }
  return result;
 }
