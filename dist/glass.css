@@ -168,3 +168,17 @@ body{background:#eef3e8;background-image:radial-gradient(ellipse at 88% 8%,#cce5
 @media (max-width: 700px) {
  .business-delete { min-width: 44px; min-height: 44px; }
 }
+
+.business-tabs a,
+.business-tabs a:hover,
+.business-tabs a:focus {
+ text-decoration: none;
+}
+.business-tabs a:hover:not(.active) {
+ background: #edf3e6;
+ color: #1e4c3b;
+}
+.button:focus-visible, .text-button:focus-visible {
+ outline: 2px solid #3e745c;
+ outline-offset: 2px;
+}
