@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {emptyData,totals} from '../dist/finance.js';
-import {ensureBusiness,businessTotals,addBusinessRecord,settleBusinessRecord,addBusinessTax,payBusinessTax,ownerWithdrawal,businessAnswer,businessCSV} from '../dist/business.js';
+import {ensureBusiness,businessTotals,addBusinessRecord,settleBusinessRecord,addBusinessTax,payBusinessTax,ownerWithdrawal,deleteBusinessRecord,businessAnswer,businessCSV} from '../dist/business.js';
 function state(){const s=emptyData('Teste');ensureBusiness(s);s.business.profile.opening_balance=100000;return s;}
 const invoice={name:'Serviço',type:'income',status:'pending',amount:50000,date:'2026-10-10',due_date:'2026-11-10',category:'Serviços',counterparty:'Cliente'};
 test('migração de perfil existente cria um negócio vazio sem alterar dados pessoais',()=>{const s=emptyData('Ana');s.profile.opening_balance=17000;s.transactions.push({id:'pessoal',name:'Receita',amount:1000,type:'income',date:'2026-11-02'});ensureBusiness(s);assert.deepEqual(s.business.records,[]);assert.equal(s.business.profile.name,'');assert.equal(s.transactions.length,1);assert.equal(totals(s,'2026-11').balance,18000);});
@@ -12,3 +12,38 @@ test('não duplica tributo da mesma competência',()=>{const s=state();const tax
 test('retirada conserva o caixa entre negócio e pessoal, sem aumentar vendas',()=>{const s=state();const before=businessTotals(s.business,'2026-11').balance+totals(s,'2026-11').balance;ownerWithdrawal(s,20000,'2026-11-04');const b=businessTotals(s.business,'2026-11'),p=totals(s,'2026-11');assert.equal(b.balance,80000);assert.equal(b.withdrawals,20000);assert.equal(b.revenue,0);assert.equal(p.income,20000);assert.equal(p.balance+b.balance,before);assert.equal(s.transactions[0].linked,s.business.records[0].linked);});
 test('CSV empresarial preserva valores decimais e escapa conteúdo de planilha',()=>{const s=state();addBusinessRecord(s,{...invoice,name:'=TESTE()',amount:12345});const csv=businessCSV(s.business,'2026-10');assert.ok(csv.includes("'=TESTE()"));assert.ok(csv.includes('123,45'));assert.ok(!businessCSV(s.business,'2026-11').includes('=TESTE()'));});
 test('análises do negócio não tratam empresa como renda pessoal',()=>{const s=state();addBusinessRecord(s,invoice);const answer=businessAnswer('Como está minha empresa?',s,'2026-10');assert.ok(answer.includes('R$ 500,00'));assert.equal(businessAnswer('Qual é minha meta pessoal?',s,'2026-10'),null);});
+
+test('excluir uma venda remove seu valor do faturamento e das contas a receber', () => {
+ const s = state();
+ addBusinessRecord(s, invoice);
+ deleteBusinessRecord(s, s.business.records[0].id);
+ const totals = businessTotals(s.business, '2026-10');
+ assert.equal(totals.revenue, 0);
+ assert.equal(totals.receivable, 0);
+ assert.equal(totals.closingBalance, 100000);
+});
+
+test('excluir uma retirada remove o par pessoal e preserva o saldo combinado', () => {
+ const s = state();
+ ownerWithdrawal(s, 20000, '2026-11-04');
+ const id = s.business.records[0].id;
+ const originalAmount = s.transactions[0].amount;
+ s.transactions[0].amount += 1;
+ assert.throws(() => deleteBusinessRecord(s, id), /vinculados/);
+ assert.equal(s.business.records.length, 1);
+ s.transactions[0].amount = originalAmount;
+ deleteBusinessRecord(s, id);
+ assert.equal(s.transactions.length, 0);
+ assert.equal(businessTotals(s.business, '2026-11').closingBalance, 100000);
+});
+
+test('excluir a baixa de um tributo volta a obrigação para a pagar', () => {
+ const s = state();
+ addBusinessTax(s, { name: 'DAS-MEI', competence: '2026-10', due_date: '2026-11-20', amount: 9000 });
+ payBusinessTax(s, s.business.taxes[0].id, '2026-11-05');
+ deleteBusinessRecord(s, s.business.records[0].id);
+ const totals = businessTotals(s.business, '2026-11');
+ assert.equal(totals.payable, 9000);
+ assert.equal(totals.spent, 0);
+ assert.equal(s.business.taxes[0].paid_date, null);
+});

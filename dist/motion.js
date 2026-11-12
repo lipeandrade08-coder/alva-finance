@@ -105,7 +105,7 @@ window.addEventListener('resize',()=>{requestAnimationFrame(syncLiquidGlassNavs)
 document.fonts?.ready?.then(()=>requestAnimationFrame(syncLiquidGlassNavs)).catch(()=>{});
 document.addEventListener('pointerover',event=>{
  if(!allowed()||event.pointerType!=='mouse'||!matchMedia('(hover:hover) and (pointer:fine)').matches)return;
- const btn=event.target.closest('.top-glass-tabs button,.sidebar .nav button,.chart-tabs button,.business-tabs button,.auth-mode-tabs button');
+ const btn=event.target.closest('.top-glass-tabs button,.sidebar .nav button,.chart-tabs button,.business-tabs a,.auth-mode-tabs button');
  if(!btn)return;
  const container=btn.closest(NAV_SELECTORS.join(','));
  if(!container)return;
